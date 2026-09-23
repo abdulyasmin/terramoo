@@ -257,11 +257,10 @@ def main(argv=None):
     i.add_argument("--root", help="the directory to hold worlds/ (default: here)")
     i.set_defaults(fn=cmd_init)
 
-    for alias in ("secret", "token"):
-        t = sub.add_parser(alias, help="store the world's password or MCP token" if alias == "secret" else argparse.SUPPRESS)
-        t.add_argument("action", choices=["store"])
-        t.add_argument("world_name")
-        t.set_defaults(fn=cmd_secret)
+    t = sub.add_parser("secret", help="store the world's password or MCP token")
+    t.add_argument("action", choices=["store"])
+    t.add_argument("world_name")
+    t.set_defaults(fn=cmd_secret)
 
     sub.add_parser("bootstrap", help="create the toolbox and install the helper verbs").set_defaults(fn=cmd_bootstrap)
     sub.add_parser("status", help="registry, files and unmanaged owned objects").set_defaults(fn=cmd_status)

@@ -28,9 +28,8 @@ This file keeps what an agent needs to avoid breaking things.
   state the MOO writes on its own, add it to `DEFAULT_IGNORE_PROPS` in
   `terramoo/world.py` (or `ignore_props` in a world), don't teach plan to
   special-case it.
-- **Secrets never touch a file in a repo.** Keychain service `terramoo`
-  (legacy `terramoo` is still read), `$TMOO_SECRET`, or
-  `~/.config/terramoo/<world>.secret`.
+- **Secrets never touch a file in a repo.** Keychain service `terramoo`,
+  `$TMOO_SECRET`, or `~/.config/terramoo/<world>.secret`.
 
 ## Commands
 

@@ -1,10 +1,9 @@
 """Where a world's secret lives: a login password or an MCP token.
 
-Looked up, in order, from the environment (`$TMOO_SECRET`, or the older
-`$TMOO_TOKEN`), the macOS Keychain (service "terramoo", account = the
-world name; "terramoo" is still read for worlds stored before the rename),
-or `~/.config/terramoo/<world>.secret`.  `tmoo secret store <world>`
-writes whichever of the last two applies.  Never a file in a world repo.
+Looked up, in order, from `$TMOO_SECRET`, the macOS Keychain (service
+"terramoo", account = the world name), or `~/.config/terramoo/<world>.secret`.
+`tmoo secret store <world>` writes whichever of the last two applies.
+Never a file in a world repo.
 """
 
 from __future__ import annotations
@@ -17,9 +16,8 @@ from pathlib import Path
 from .errors import MooError
 
 KEYCHAIN_SERVICE = "terramoo"
-LEGACY_SERVICES = ("terramoo",)
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "terramoo"
-ENV_VARS = ("TMOO_SECRET", "TMOO_TOKEN")
+ENV_VAR = "TMOO_SECRET"
 
 
 def _keychain_read(service: str, world: str) -> str | None:
@@ -34,13 +32,11 @@ def _keychain_read(service: str, world: str) -> str | None:
 
 
 def secret_for(world: str) -> str:
-    for var in ENV_VARS:
-        if os.environ.get(var):
-            return os.environ[var]
-    for service in (KEYCHAIN_SERVICE, *LEGACY_SERVICES):
-        found = _keychain_read(service, world)
-        if found:
-            return found
+    if os.environ.get(ENV_VAR):
+        return os.environ[ENV_VAR]
+    found = _keychain_read(KEYCHAIN_SERVICE, world)
+    if found:
+        return found
     f = CONFIG_DIR / f"{world}.secret"
     if f.exists():
         return f.read_text().strip()

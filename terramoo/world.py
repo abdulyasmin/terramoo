@@ -22,8 +22,6 @@
     ignore_props = []             # beyond DEFAULT_IGNORE_PROPS
     keep_props = []               # re-enable one of those
 
-A top-level `url` (the pre-terramoo shape) is read as an mcp connection.
-
 The toolbox is an object the player owns, reached as `player.tmoo`,
 holding the registry and the helper verbs (`terramoo/helper/*.moo`).  It
 is the only thing `tmoo` creates that the files do not describe.
@@ -39,7 +37,7 @@ from pathlib import Path
 from . import objdef
 from .errors import MooError
 from .model import ObjectDef
-from .moolit import Err, Map, Obj, serialize
+from .moolit import Err, Obj, serialize
 from .refs import Refs, load_state, save_state
 from .secrets import secret_for
 from .transport import Transport, connect
@@ -47,11 +45,8 @@ from .transport import Transport, connect
 HELPER_DIR = Path(__file__).parent / "helper"
 HELPER_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs", "tmoo_info")
 SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
-LEGACY_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
-LEGACY_TOOLBOX_PROP = "tmoo"
-LEGACY_TOOLBOX_NAME = "terramoo toolbox"
 
 # Properties that are the MOO's runtime state rather than the object's
 # definition, on LambdaCore and its descendants.  Exits and entrances are
@@ -94,13 +89,12 @@ DEFAULT_IGNORE_PROPS = {
     "last_move",
     "object_size",
     TOOLBOX_PROP,
-    LEGACY_TOOLBOX_PROP,
 }
 
 
 def find_root(start: Path | None = None) -> Path:
     """The nearest directory with a `worlds/` in it, or `$TMOO_ROOT`."""
-    env = os.environ.get("TMOO_ROOT") or os.environ.get("TMOO_ROOT")
+    env = os.environ.get("TMOO_ROOT")
     if env:
         return Path(env)
     here = (start or Path.cwd()).resolve()
@@ -111,10 +105,7 @@ def find_root(start: Path | None = None) -> Path:
 
 
 def registry_value(raw) -> dict[str, Obj]:
-    """The registry as `tmoo_apply` keeps it ({keys, objects}), or as the
-    terramoo toolbox did (a map)."""
-    if isinstance(raw, Map):
-        return {str(k): v for k, v in raw.items()}
+    """The registry as `tmoo_apply` keeps it: {keys, objects}."""
     if isinstance(raw, list) and len(raw) == 2 and all(isinstance(x, list) for x in raw):
         return dict(zip(raw[0], raw[1]))
     return {}
@@ -137,7 +128,7 @@ class World:
         worlds_dir = root / "worlds"
         worlds = sorted(p.name for p in worlds_dir.iterdir() if (p / "world.toml").exists()) if worlds_dir.is_dir() else []
         if name is None:
-            name = os.environ.get("TMOO_WORLD") or os.environ.get("TMOO_WORLD") or (worlds[0] if len(worlds) == 1 else None)
+            name = os.environ.get("TMOO_WORLD") or (worlds[0] if len(worlds) == 1 else None)
         if name is None:
             raise MooError(f"which world? one of: {', '.join(worlds) or '(none)'} (pass --world or set TMOO_WORLD)")
         cfg_path = worlds_dir / name / "world.toml"
@@ -145,8 +136,6 @@ class World:
             raise MooError(f"no such world {name!r} (looked for {cfg_path})")
         cfg = tomllib.loads(cfg_path.read_text())
         conn = dict(cfg.get("connection", {}))
-        if "url" in cfg and not conn:
-            conn = {"transport": "mcp", "url": cfg["url"]}
         if "player" not in cfg:
             raise MooError(f"{cfg_path}: `player` is required")
         ignore = set(DEFAULT_IGNORE_PROPS) | set(cfg.get("ignore_props", []))
@@ -269,7 +258,7 @@ class World:
         if tb is not None:
             log(f"toolbox is {tb}")
         else:
-            tb = self._toolbox_via(LEGACY_TOOLBOX_PROP) or self._find_orphan_toolbox()
+            tb = self._find_orphan_toolbox()
             if tb is not None:
                 log(f"adopting toolbox {tb} left by an earlier bootstrap")
             else:
@@ -287,17 +276,6 @@ class World:
             code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
             r = self.transport.install_verb(tb, name, code)
             log(f"{tb}:{name} {r}")
-        existing = self.eval(f"verbs({tb})")
-        for name in LEGACY_VERBS:
-            if name in existing:
-                self.eval(f'delete_verb({tb}, "{name}")')
-                log(f"removed {tb}:{name}")
-        # The registry as tmoo_apply keeps it: a terramoo map is converted once.
-        raw = self.eval(f"{tb}.registry")
-        if not (isinstance(raw, list) and len(raw) == 2):
-            reg = registry_value(raw)
-            self.transport.set_prop(tb, "registry", [list(reg), list(reg.values())])
-            log(f"converted the registry ({len(reg)} entries) to lists")
         if self.eval(f"{tb}.name") != TOOLBOX_NAME:
             self.transport.set_prop(tb, "name", TOOLBOX_NAME)
         return tb
@@ -312,7 +290,7 @@ class World:
             return None
         for o in owned if isinstance(owned, list) else []:
             try:
-                if self.eval(f"{o}.name") in (TOOLBOX_NAME, LEGACY_TOOLBOX_NAME):
+                if self.eval(f"{o}.name") == TOOLBOX_NAME:
                     return o
             except MooError:
                 continue
