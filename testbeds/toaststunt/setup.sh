@@ -7,12 +7,20 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="${TOASTSTUNT_SRC:-$HOME/src/toaststunt}"
-CORE_DB="${TOASTCORE_DB:-$HOME/src/toastcore/toastcore.db}"
+SRC="${TOASTSTUNT_SRC:-$HERE/.src/toaststunt}"
+CORE_DB="${TOASTCORE_DB:-$HERE/.src/toastcore/toastcore.db}"
 BUILD="$HERE/.build"
 RUN="$HERE/.run"
 RESET=0
 [[ "${1:-}" == "--reset" ]] && RESET=1
+
+# --- sources: clone upstream unless TOASTSTUNT_SRC / TOASTCORE_DB point elsewhere
+if [[ -z "${TOASTSTUNT_SRC:-}" && ! -d "$SRC/.git" ]]; then
+  git clone --quiet --depth 1 https://github.com/lisdude/toaststunt "$SRC"
+fi
+if [[ -z "${TOASTCORE_DB:-}" && ! -f "$CORE_DB" ]]; then
+  git clone --quiet --depth 1 https://github.com/lisdude/toastcore "$(dirname "$CORE_DB")"
+fi
 
 [[ -f "$SRC/CMakeLists.txt" ]] || { echo "no ToastStunt source at $SRC" >&2; exit 1; }
 [[ -f "$CORE_DB" ]] || { echo "no ToastCore DB at $CORE_DB" >&2; exit 1; }

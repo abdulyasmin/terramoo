@@ -6,4 +6,5 @@ __pycache__/
 dist/
 /worlds/*/.cache/
 /testbeds/*/.build/
+/testbeds/*/.src/
 /testbeds/*/.run/
