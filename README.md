@@ -177,6 +177,9 @@ testbeds/toaststunt/stop.sh
 It refuses to run against a player whose registry manages anything but
 test objects.
 
+To review or change the code, start with `REVIEW.md`: the architecture, a
+reading order and the traps.
+
 ## License
 
 GNU Affero General Public License v3.0 or later; see `LICENSE`.

@@ -1,6 +1,7 @@
 # terramoo — agent guide
 
 Read `README.md` first: the commands, the file format, the transports.
+`REVIEW.md` maps the implementation: architecture, reading order, traps.
 This file keeps what an agent needs to avoid breaking things.
 
 ## Rules
