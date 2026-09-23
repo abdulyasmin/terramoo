@@ -74,7 +74,12 @@ def test_value_is_reassembled_from_chunks_amid_noise():
     assert "Bob says, \"hi\"" in t.noise
 
 
-def test_raised_error_becomes_moo_error():
+@pytest.mark.parametrize("expression, error_reply, expected", [
+    ("secret", lambda tag: [tag + "S", tag + 'X{E_PERM, "Permission denied"}'], "E_PERM: Permission denied"),
+    ("bad(", lambda tag: ["Line 1:  syntax error", "1 error."], "did not compile:\n  Line 1:  syntax error"),
+])
+def test_errors_become_moo_errors(expression, error_reply, expected):
+    """A raised error is reported as such; a compile error quotes what the core printed."""
     def reply(tag, line):
         if tag is None:
             return []
@@ -82,24 +87,10 @@ def test_raised_error_becomes_moo_error():
             return [tag + "Z"]
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
-        return [tag + "S", tag + 'X{E_PERM, "Permission denied"}']
+        return error_reply(tag)
     t = client(FakeMoo(reply))
-    with pytest.raises(MooError, match="E_PERM: Permission denied"):
-        t.eval("secret")
-
-
-def test_compile_error_quotes_what_the_core_printed():
-    def reply(tag, line):
-        if tag is None:
-            return []
-        if is_sentinel(tag, line):
-            return [tag + "Z"]
-        if "_r = (player)" in line:
-            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
-        return ["Line 1:  syntax error", "1 error."]
-    t = client(FakeMoo(reply))
-    with pytest.raises(MooError, match="did not compile:\n  Line 1:  syntax error"):
-        t.eval("bad(")
+    with pytest.raises(MooError, match=expected):
+        t.eval(expression)
 
 
 def test_login_failure_is_reported_at_once():
