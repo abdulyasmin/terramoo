@@ -107,6 +107,9 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict | None = None, dest
         created = [k for k, _, _ in plan.creates if k in refs.registry]
         if files and created:
             plan_ops = _replan_created(world, plan_ops, created, files, refs)
+        # A key whose create failed now fails to resolve, so each op that
+        # needs it is skipped instead of sending `@key` to the MOO.
+        refs.pending = set()
     if plan_ops:
         log("applying:")
         ops, labels = [], []
