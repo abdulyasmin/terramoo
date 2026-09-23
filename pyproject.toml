@@ -3,6 +3,8 @@ name = "terramoo"
 version = "0.2.0"
 description = "Declarative management of a MOO player's objects: objdef files, plan and apply against any MOO."
 readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = []
 
