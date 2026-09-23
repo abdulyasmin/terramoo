@@ -123,3 +123,24 @@ def test_map_values_compare_after_resolution():
     want = room(props=[PropDef("links", Map({"north": Ref("@", "gate")}), defined=False)])
     have = room(props=[PropDef("links", Map({"north": Obj(201)}), defined=False)], obj=Obj(200))
     assert plan.diff_object("hall", want, have, r) == []
+
+
+def test_reference_to_a_key_with_no_file_is_a_problem():
+    r = refs(hall=200, door=201)
+    files = {"hall": room(props=[PropDef("exit_to", Ref("@", "door"))])}
+    p = plan.build(files, {"hall": room(obj=Obj(200))}, r)
+    assert p.problems == ["hall: refers to @door, which has no file"]
+    assert not p.creates and not p.ops
+    assert p.destroys == ["door"]
+
+
+def test_reference_to_a_recreated_object_waits_for_its_new_number():
+    """door is in the registry but gone from the MOO: hall's reference to it
+    must not resolve to the recycled number."""
+    r = refs(hall=200, door=201)
+    files = {"hall": room(props=[PropDef("to", Ref("@", "door"))]),
+             "door": ObjectDef(key="door", name="door", parent=Ref("$", "exit"))}
+    live = {"hall": room(props=[PropDef("to", Obj(201))], obj=Obj(200)), "door": None}
+    p = plan.build(files, live, r)
+    assert [c[0] for c in p.creates] == ["door"]
+    assert ("setprop", Ref("@", "hall"), "to", Ref("@", "door")) in p.ops

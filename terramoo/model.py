@@ -65,6 +65,21 @@ class ObjectDef:
         return None
 
 
+def ordered_like(obj: ObjectDef, template: ObjectDef) -> ObjectDef:
+    """`obj` with its properties and verbs in `template`'s order, new ones
+    after, in their own order.  Servers list inherited properties in
+    different orders; a pull should not reshuffle a file for that."""
+    def rank(names: list[str]):
+        pos = {n: i for i, n in enumerate(names)}
+        return lambda item_name: pos.get(item_name, len(pos))
+
+    prop_rank = rank([p.name for p in template.props])
+    verb_rank = rank([v.key for v in template.verbs])
+    obj.props.sort(key=lambda p: prop_rank(p.name))  # stable: new ones keep their order
+    obj.verbs.sort(key=lambda v: verb_rank(v.key))
+    return obj
+
+
 def normalize_flags(flags: str) -> str:
     return "".join(c for c in "rwf" if c in flags)
 

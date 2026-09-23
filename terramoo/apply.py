@@ -17,8 +17,6 @@ from .plan import Plan, describe
 from .refs import Refs
 from .world import World
 
-BATCH_BYTES = 24_000  # the expression text per call; the gate has ~8 s and a body cap
-
 
 @dataclass
 class Outcome:
@@ -47,15 +45,13 @@ def _resolve_op(op: tuple, refs: Refs) -> list:
 
 
 def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> None:
-    expr_head = f"{world.toolbox}:tmoo_apply("
     batch, batch_labels, size = [], [], 0
-    flush_list = []
+    limit = world.transport.batch_bytes
 
     def flush():
         if not batch:
             return
-        expr = expr_head + moolit.serialize(batch) + ")"
-        results = world.eval(expr)
+        results = world.eval(world.helper("tmoo_apply", moolit.serialize(batch)))
         for label, res in zip(batch_labels, results):
             if res[0] == 1:
                 outcome.done.append(label)
@@ -70,7 +66,7 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
 
     for op, label in zip(ops, labels):
         text = moolit.serialize(op)
-        if batch and size + len(text) > BATCH_BYTES:
+        if batch and size + len(text) > limit:
             flush()
             size = 0
         batch.append(op)

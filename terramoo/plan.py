@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .model import ObjectDef, PropDef, VerbDef, normalize_flags, normalize_perms
-from .moolit import Obj, Ref
+from .moolit import Obj, Ref, walk
 from .refs import Refs, UnresolvedRef
 
 
@@ -30,8 +30,8 @@ class Plan:
         return not (self.creates or self.ops or self.destroys)
 
 
-def _me(refs: Refs, owner):
-    return refs.player if owner is None else refs.resolve_ref(owner)
+def _me(refs: Refs, owner, *, live: bool = False):
+    return refs.player if owner is None else refs.resolve_ref(owner, live=live)
 
 
 def _key_ref(key: str) -> Ref:
@@ -42,6 +42,14 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     plan = Plan()
     broken: set[str] = set()
 
+    # A reference to a key with no file would dangle as soon as that key is
+    # destroyed (or would never be created): say so before anything runs.
+    for key, obj in files.items():
+        missing = sorted(n for n in _at_refs(obj) if n != "me" and n not in files)
+        if missing:
+            plan.problems.append(f"{key}: refers to {', '.join('@' + n for n in missing)}, which has no file")
+            broken.add(key)
+
     # Creates, parents first.  A parent that is itself a new object is
     # passed by registry name; the helper resolves it from what it just made.
     new_keys = [k for k in files if k not in refs.registry or live.get(k) is None]
@@ -49,6 +57,8 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     refs.pending = set(new_keys)
     ordered = _topo(new_keys, files)
     for key in ordered:
+        if key in broken:
+            continue
         obj = files[key]
         parent = obj.parent
         if isinstance(parent, Ref) and parent.kind == "@" and parent.name in new_keys:
@@ -85,6 +95,20 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     return plan
 
 
+def _at_refs(obj: ObjectDef) -> set[str]:
+    found: set[str] = set()
+
+    def leaf(v):
+        if isinstance(v, Ref) and v.kind == "@":
+            found.add(v.name)
+        return v
+
+    for v in (obj.parent, obj.location, obj.owner, *(p.value for p in obj.props), *(p.owner for p in obj.props),
+              *(v.owner for v in obj.verbs)):
+        walk(v, leaf)
+    return found
+
+
 def _topo(keys: list[str], files: dict[str, ObjectDef]) -> list[str]:
     out, seen = [], set()
 
@@ -114,11 +138,14 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
     ops: list[tuple] = []
     r = refs.resolve_ref
 
+    def h(v):  # a live value: a key being recreated is still its old number
+        return refs.resolve_ref(v, live=True)
+
     if have is not None and want.name != have.name:
         ops.append(("name", me, want.name))
-    if have is not None and r(want.parent) != r(have.parent):
+    if have is not None and r(want.parent) != h(have.parent):
         ops.append(("chparent", me, r(want.parent)))
-    if r(want.location) != (r(have.location) if have else Obj(-1)):
+    if r(want.location) != (h(have.location) if have else Obj(-1)):
         ops.append(("move", me, r(want.location)))
     want_flags = normalize_flags(want.flags)
     if want_flags != (normalize_flags(have.flags) if have else ""):
@@ -136,14 +163,14 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
             elif not cur.defined:
                 raise UnresolvedRef(f"property {p.name} is inherited on the MOO but `property` (defined) in the file")
             else:
-                if (owner, perms) != (_me(refs, cur.owner), normalize_perms(cur.perms, "rwc")):
+                if (owner, perms) != (_me(refs, cur.owner, live=True), normalize_perms(cur.perms, "rwc")):
                     ops.append(("propinfo", me, p.name, [owner, perms]))
-                if value != refs.resolve(cur.value):
+                if value != refs.resolve(cur.value, live=True):
                     ops.append(("setprop", me, p.name, value))
         else:
             if cur is not None and cur.defined:
                 raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
-            if cur is None or value != refs.resolve(cur.value):
+            if cur is None or value != refs.resolve(cur.value, live=True):
                 ops.append(("setprop", me, p.name, value))
     for name, cur in have_props.items():
         ops.append(("rmprop", me, name) if cur.defined else ("clearprop", me, name))
@@ -156,7 +183,7 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
         if cur is None:
             ops.append(("addverb", me, [owner, perms, v.names], list(v.args), list(v.code)))
             continue
-        if (owner, perms, v.names) != (_me(refs, cur.owner), normalize_perms(cur.perms, "rwxd"), cur.names):
+        if (owner, perms, v.names) != (_me(refs, cur.owner, live=True), normalize_perms(cur.perms, "rwxd"), cur.names):
             ops.append(("verbinfo", me, v.key, [owner, perms, v.names]))
         if tuple(v.args) != tuple(cur.args):
             ops.append(("verbargs", me, v.key, list(v.args)))

@@ -12,19 +12,61 @@ from . import apply as apply_mod
 from . import export as export_mod
 from . import moolit, objdef
 from . import plan as plan_mod
-from .mcp import MooError, store_token
-from .moolit import Obj, from_json
+from .errors import MooError
+from .model import ordered_like
+from .moolit import Obj
+from .secrets import store_secret
 from .world import World, find_root
+
+_open: list[World] = []
 
 
 def _world(args) -> World:
-    return World.load(find_root(), args.world)
+    w = World.load(find_root(), args.world)
+    _open.append(w)
+    return w
 
 
-def cmd_token(args):
+WORLD_TOML = """\
+# {name}: {where}, as {player}.
+# The password (or MCP token) is in the Keychain via `tmoo secret store {name}`,
+# never in this file.
+player = "{player}"
+
+[connection]
+{connection}
+[core]
+toolbox_parent = "$thing"
+
+# Runtime-state properties never written to files, beyond the built-in list
+# in terramoo/world.py.  `keep_props` re-enables one from that list.
+ignore_props = []
+keep_props = []
+"""
+
+
+def cmd_init(args):
+    root = Path(args.root or ".").resolve()
+    d = root / "worlds" / args.name
+    if (d / "world.toml").exists():
+        raise MooError(f"{d / 'world.toml'} already exists")
+    if args.url:
+        conn = f'transport = "mcp"\nurl = "{args.url}"\n'
+        where = args.url
+    else:
+        if not args.host:
+            raise MooError("give --host (and --port, --tls) for telnet, or --url for mcp")
+        conn = f'transport = "telnet"\nhost = "{args.host}"\nport = {args.port}\ntls = {"true" if args.tls else "false"}\n'
+        where = f"{args.host}:{args.port}"
+    (d / "objects").mkdir(parents=True, exist_ok=True)
+    (d / "world.toml").write_text(WORLD_TOML.format(name=args.name, where=where, player=args.player, connection=conn))
+    print(f"wrote {d / 'world.toml'}; next: `tmoo secret store {args.name}`, then `tmoo -w {args.name} bootstrap`")
+
+
+def cmd_secret(args):
     if args.action == "store":
-        token = getpass.getpass(f"MCP token for {args.world_name} (from @mcp-token in the MOO): ")
-        where = store_token(args.world_name, token.strip())
+        secret = getpass.getpass(f"password (or MCP token) for world {args.world_name}: ")
+        where = store_secret(args.world_name, secret.strip())
         print(f"stored in {where}")
 
 
@@ -39,21 +81,27 @@ def cmd_status(args):
     w = _world(args)
     refs = w.refs()
     files = w.load_files()
-    print(f"world {w.name}: {w.url} as {w.player_name} ({refs.player}), toolbox {w.toolbox}")
+    owned, version = w.server_info()
+    print(f"world {w.name}: {w.describe()} ({version or 'unknown server'}) as {w.player_name} ({refs.player}), toolbox {w.toolbox}")
     print(f"registry: {len(refs.registry)} objects, files: {len(files)}")
     for key, o in sorted(refs.registry.items()):
         mark = "" if key in files else "  (no file)"
         print(f"  {key:32} {o}{mark}")
     for key in sorted(set(files) - set(refs.registry)):
         print(f"  {key:32} (not created yet)")
-    owned = [from_json(o) for o in w.eval("player.owned_objects")]
-    known = set(refs.registry.values()) | {refs.player, w.toolbox}
-    stray = [o for o in owned if o not in known]
+    if owned is None:
+        print("(this core keeps no owned_objects list, so unmanaged objects are not listed)")
+        return
+    stray = _stray(w, refs, owned)
     if stray:
-        names = w.eval("$list_utils:map_prop(" + "{" + ", ".join(map(str, stray)) + "}" + ', "name")')
         print("owned but unmanaged (`tmoo adopt <#n> <key>` or `tmoo adopt --owned`):")
-        for o, n in zip(stray, names):
-            print(f"  {o:>6}  {n}")
+        for o, n in zip(stray, w.names(stray)):
+            print(f"  {str(o):>6}  {n}")
+
+
+def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
+    known = set(refs.registry.values()) | {refs.player, w.toolbox}
+    return [o for o in owned if o not in known]
 
 
 def _export_all(w: World, refs, keys):
@@ -64,6 +112,12 @@ def _export_all(w: World, refs, keys):
         if obj is None:
             print(f"  {key}: registry names {refs.registry[key]} but the MOO has no such object", file=sys.stderr)
             continue
+        path = w.file_for(key)
+        if path.exists():
+            try:
+                ordered_like(obj, objdef.parse(path.read_text()))
+            except (objdef.FormatError, ValueError):
+                pass  # an unreadable file is simply replaced
         w.write_file(obj)
         written.append(key)
     return written
@@ -86,14 +140,13 @@ def cmd_adopt(args):
     refs = w.refs()
     new: list[tuple[str, Obj]] = []
     if args.owned:
-        owned = [from_json(o) for o in w.eval("player.owned_objects")]
-        known = set(refs.registry.values()) | {refs.player, w.toolbox}
-        stray = [o for o in owned if o not in known]
-        if stray:
-            names = w.eval("$list_utils:map_prop(" + "{" + ", ".join(map(str, stray)) + "}" + ', "name")')
-            taken = set(refs.registry) | {p.stem for p in w.objects_dir.glob("*.moo")}
-            for o, n in zip(stray, names):
-                new.append((export_mod.slug(n, taken), o))
+        owned = w.owned()
+        if owned is None:
+            raise MooError("this core keeps no owned_objects list; adopt objects one at a time: tmoo adopt <#n> <key>")
+        stray = _stray(w, refs, owned)
+        taken = set(refs.registry) | {p.stem for p in w.objects_dir.glob("*.moo")}
+        for o, n in zip(stray, w.names(stray)):
+            new.append((export_mod.slug(n, taken), o))
     else:
         if not args.object or not args.key:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
@@ -105,7 +158,7 @@ def cmd_adopt(args):
         print("nothing to adopt")
         return
     ops = [["register", k, o] for k, o in new]
-    results = w.eval(f"{w.toolbox}:tmoo_apply({moolit.serialize(ops)})")
+    results = w.eval(w.helper("tmoo_apply", moolit.serialize(ops)))
     for (k, o), res in zip(new, results):
         print(f"  {k} = {o}" if res[0] == 1 else f"  {k}: {res[1]} {res[2]}")
     refs.registry = w.read_registry()
@@ -190,14 +243,25 @@ def cmd_diff(args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="tmoo", description="a MOO player's objects as files")
+    ap = argparse.ArgumentParser(prog="tmoo", description="a MOO player's objects as files, on any MOO")
     ap.add_argument("--world", "-w", help="world name under worlds/ (default: the only one, or $TMOO_WORLD)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    t = sub.add_parser("token", help="store the MCP token")
-    t.add_argument("action", choices=["store"])
-    t.add_argument("world_name")
-    t.set_defaults(fn=cmd_token)
+    i = sub.add_parser("init", help="start a world: worlds/<name>/world.toml")
+    i.add_argument("name")
+    i.add_argument("--player", required=True)
+    i.add_argument("--host")
+    i.add_argument("--port", type=int, default=7777)
+    i.add_argument("--tls", action="store_true")
+    i.add_argument("--url", help="an MCP endpoint instead of telnet")
+    i.add_argument("--root", help="the directory to hold worlds/ (default: here)")
+    i.set_defaults(fn=cmd_init)
+
+    for alias in ("secret", "token"):
+        t = sub.add_parser(alias, help="store the world's password or MCP token" if alias == "secret" else argparse.SUPPRESS)
+        t.add_argument("action", choices=["store"])
+        t.add_argument("world_name")
+        t.set_defaults(fn=cmd_secret)
 
     sub.add_parser("bootstrap", help="create the toolbox and install the helper verbs").set_defaults(fn=cmd_bootstrap)
     sub.add_parser("status", help="registry, files and unmanaged owned objects").set_defaults(fn=cmd_status)
@@ -232,6 +296,9 @@ def main(argv=None):
     except MooError as e:
         print(f"tmoo: {e}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        for w in _open:
+            w.close()
 
 
 if __name__ == "__main__":

@@ -1,12 +1,32 @@
 """A world: one MOO, one player, one directory of object files.
 
-    worlds/<name>/world.toml      url, player, ignored properties
+    worlds/<name>/world.toml      connection, player, core settings
     worlds/<name>/objects/*.moo   one objdef file per managed object
     worlds/<name>/state.json      mirror of the in-MOO registry
 
-The toolbox is a `$thing` the player owns, reached as `player.tmoo`, holding
-the registry map and the helper verbs (`terramoo/helper/*.moo`).  It is the
-only thing `tmoo` creates that the files do not describe.
+`world.toml`:
+
+    player = "alice"
+
+    [connection]
+    transport = "telnet"          # or "mcp"
+    host = "moo.example.org"
+    port = 7777
+    tls = false
+    # login, eval_prefix, tell, chunk, timeout, batch_bytes: see
+    # terramoo/transport/telnet.py
+
+    [core]
+    toolbox_parent = "$thing"     # what the toolbox is created from
+
+    ignore_props = []             # beyond DEFAULT_IGNORE_PROPS
+    keep_props = []               # re-enable one of those
+
+A top-level `url` (the pre-terramoo shape) is read as an mcp connection.
+
+The toolbox is an object the player owns, reached as `player.tmoo`,
+holding the registry and the helper verbs (`terramoo/helper/*.moo`).  It
+is the only thing `tmoo` creates that the files do not describe.
 """
 
 from __future__ import annotations
@@ -16,19 +36,27 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import moolit, objdef
-from .mcp import Client, MooError, token_for
+from . import objdef
+from .errors import MooError
 from .model import ObjectDef
-from .moolit import Obj, from_json
+from .moolit import Err, Map, Obj, serialize
 from .refs import Refs, load_state, save_state
+from .secrets import secret_for
+from .transport import Transport, connect
 
 HELPER_DIR = Path(__file__).parent / "helper"
-HELPER_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs")
+HELPER_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs", "tmoo_info")
+SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
+LEGACY_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs")
 TOOLBOX_NAME = "terramoo toolbox"
+TOOLBOX_PROP = "tmoo"
+LEGACY_TOOLBOX_PROP = "tmoo"
+LEGACY_TOOLBOX_NAME = "terramoo toolbox"
 
 # Properties that are the MOO's runtime state rather than the object's
-# definition.  Exits and entrances are derived: `tmoo apply` links every
-# managed exit into its rooms after everything else is in place.
+# definition, on LambdaCore and its descendants.  Exits and entrances are
+# derived: `tmoo apply` links every managed exit into its rooms after
+# everything else is in place.
 DEFAULT_IGNORE_PROPS = {
     "exits",
     "entrances",
@@ -65,46 +93,69 @@ DEFAULT_IGNORE_PROPS = {
     "notified",
     "last_move",
     "object_size",
-    "tmoo",
+    # The lock: every LambdaCore-family `initialize` sets it to 0 on create,
+    # and `@lock` is how players change it.  `keep_props = ["key"]` manages it.
+    "key",
+    TOOLBOX_PROP,
+    LEGACY_TOOLBOX_PROP,
 }
 
 
 def find_root(start: Path | None = None) -> Path:
-    env = os.environ.get("TMOO_ROOT")
+    """The nearest directory with a `worlds/` in it, or `$TMOO_ROOT`."""
+    env = os.environ.get("TMOO_ROOT") or os.environ.get("TMOO_ROOT")
     if env:
         return Path(env)
     here = (start or Path.cwd()).resolve()
     for d in (here, *here.parents):
-        if (d / "worlds").is_dir() and (d / "pyproject.toml").exists():
+        if (d / "worlds").is_dir():
             return d
-    return Path(__file__).resolve().parents[1]
+    raise MooError("no worlds/ directory here or above (run `tmoo init <world>` to start one, or set TMOO_ROOT)")
+
+
+def registry_value(raw) -> dict[str, Obj]:
+    """The registry as `tmoo_apply` keeps it ({keys, objects}), or as the
+    terramoo toolbox did (a map)."""
+    if isinstance(raw, Map):
+        return {str(k): v for k, v in raw.items()}
+    if isinstance(raw, list) and len(raw) == 2 and all(isinstance(x, list) for x in raw):
+        return dict(zip(raw[0], raw[1]))
+    return {}
 
 
 @dataclass
 class World:
     name: str
     root: Path
-    url: str
     player_name: str
+    connection: dict
+    core: dict = field(default_factory=dict)
     ignore_props: set[str] = field(default_factory=lambda: set(DEFAULT_IGNORE_PROPS))
-    _client: Client | None = None
+    _transport: Transport | None = None
     _player: Obj | None = None
     _toolbox: Obj | None = None
 
     @classmethod
     def load(cls, root: Path, name: str | None) -> "World":
-        worlds = sorted(p.name for p in (root / "worlds").iterdir() if (p / "world.toml").exists())
+        worlds_dir = root / "worlds"
+        worlds = sorted(p.name for p in worlds_dir.iterdir() if (p / "world.toml").exists()) if worlds_dir.is_dir() else []
         if name is None:
-            name = os.environ.get("TMOO_WORLD") or (worlds[0] if len(worlds) == 1 else None)
+            name = os.environ.get("TMOO_WORLD") or os.environ.get("TMOO_WORLD") or (worlds[0] if len(worlds) == 1 else None)
         if name is None:
-            raise MooError(f"which world? one of: {', '.join(worlds)} (pass --world or set TMOO_WORLD)")
-        cfg_path = root / "worlds" / name / "world.toml"
+            raise MooError(f"which world? one of: {', '.join(worlds) or '(none)'} (pass --world or set TMOO_WORLD)")
+        cfg_path = worlds_dir / name / "world.toml"
         if not cfg_path.exists():
             raise MooError(f"no such world {name!r} (looked for {cfg_path})")
         cfg = tomllib.loads(cfg_path.read_text())
+        conn = dict(cfg.get("connection", {}))
+        if "url" in cfg and not conn:
+            conn = {"transport": "mcp", "url": cfg["url"]}
+        if "player" not in cfg:
+            raise MooError(f"{cfg_path}: `player` is required")
         ignore = set(DEFAULT_IGNORE_PROPS) | set(cfg.get("ignore_props", []))
         ignore -= set(cfg.get("keep_props", []))
-        return cls(name=name, root=root, url=cfg["url"], player_name=cfg["player"], ignore_props=ignore)
+        return cls(name=name, root=root, player_name=cfg["player"], connection=conn,
+                   core=dict(cfg.get("core", {})), ignore_props=ignore)
 
     # ----- paths
 
@@ -123,10 +174,17 @@ class World:
     def file_for(self, key: str) -> Path:
         return self.objects_dir / f"{key}.moo"
 
+    def describe(self) -> str:
+        c = self.connection
+        if c.get("transport", "telnet") == "mcp":
+            return c.get("url", "?")
+        return f"{'tls' if c.get('tls') else 'telnet'}://{c.get('host')}:{c.get('port', 7777)}"
+
     # ----- files
 
     def load_files(self) -> dict[str, ObjectDef]:
         out = {}
+        folded: dict[str, str] = {}
         for path in sorted(self.objects_dir.glob("*.moo")):
             try:
                 obj = objdef.parse(path.read_text())
@@ -134,6 +192,10 @@ class World:
                 raise MooError(f"{path.relative_to(self.root)}: {e}") from None
             if obj.key != path.stem:
                 raise MooError(f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}")
+            # MOO string comparison ignores case, and so does the registry.
+            if obj.key.lower() in folded:
+                raise MooError(f"keys {folded[obj.key.lower()]!r} and {obj.key!r} differ only in case")
+            folded[obj.key.lower()] = obj.key
             out[obj.key] = obj
         return out
 
@@ -146,82 +208,124 @@ class World:
     # ----- the MOO
 
     @property
-    def client(self) -> Client:
-        if self._client is None:
-            self._client = Client(self.url, token_for(self.name))
-        return self._client
+    def transport(self) -> Transport:
+        if self._transport is None:
+            self._transport = connect(self.connection, self.player_name, secret_for(self.name))
+        return self._transport
+
+    def close(self) -> None:
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
 
     def eval(self, expression: str):
-        return self.client.eval(expression)
+        return self.transport.eval(expression)
+
+    def helper(self, verb: str, *args: str) -> str:
+        """The expression that calls a toolbox helper with MOO-source `args`."""
+        args = list(args)
+        if verb in SUSPENDING_HELPERS:
+            args.append("1" if self.transport.can_suspend else "0")
+        return f"{self.toolbox}:{verb}({', '.join(args)})"
 
     @property
     def player(self) -> Obj:
         if self._player is None:
-            who = from_json(self.eval("{player, player.name}"))
-            self._player = who[0]
-            if who[1] != self.player_name:
-                raise MooError(f"the token belongs to {who[1]} ({who[0]}), but world.toml says player = {self.player_name!r}")
+            who, name = self.eval("{player, player.name}")
+            self._player = who
+            if name.lower() != self.player_name.lower():
+                raise MooError(f"logged in as {name} ({who}), but world.toml says player = {self.player_name!r}")
         return self._player
+
+    def _toolbox_via(self, prop: str) -> Obj | None:
+        if self.eval(f'"{prop}" in properties(player) && valid(player.{prop})'):
+            return self.eval(f"player.{prop}")
+        return None
 
     @property
     def toolbox(self) -> Obj:
         if self._toolbox is None:
-            has = self.eval('$object_utils:has_property(player, "tmoo") && valid(player.tmoo)')
-            if not has:
+            tb = self._toolbox_via(TOOLBOX_PROP)
+            if tb is None:
                 raise MooError("no toolbox on this player yet: run `tmoo bootstrap`")
-            self._toolbox = from_json(self.eval("player.tmoo"))
+            self._toolbox = tb
         return self._toolbox
 
+    def server_info(self) -> tuple[list[Obj] | None, str]:
+        """What the player owns, when the core keeps a list (LambdaCore's
+        `owned_objects`; None when it does not), and `server_version()`."""
+        owned, version = self.eval(self.helper("tmoo_info"))
+        return (None if isinstance(owned, Err) else list(owned)), version
+
+    def owned(self) -> list[Obj] | None:
+        return self.server_info()[0]
+
+    def names(self, objs: list[Obj]) -> list[str]:
+        if not objs:
+            return []
+        return [name for _, _, name in self.eval(self.helper("tmoo_info", serialize(objs)))]
+
     def bootstrap(self, log=print) -> Obj:
-        """Create the toolbox if it is missing and (re)install the helper verbs."""
-        player = self.player
-        has = self.eval('$object_utils:has_property(player, "tmoo") && valid(player.tmoo)')
-        if has:
-            tb = from_json(self.eval("player.tmoo"))
+        """Find or create the toolbox and (re)install the helper verbs."""
+        self.player
+        tb = self._toolbox_via(TOOLBOX_PROP)
+        if tb is not None:
             log(f"toolbox is {tb}")
         else:
-            tb = self._find_orphan_toolbox()
-            if tb is None:
-                tb = from_json(self.eval("create($thing)"))
-                log(f"created toolbox {tb}")
-                self.client.call_tool("set_prop", {"object": str(tb), "prop": "name", "value": moolit.escape(TOOLBOX_NAME)})
-            else:
+            tb = self._toolbox_via(LEGACY_TOOLBOX_PROP) or self._find_orphan_toolbox()
+            if tb is not None:
                 log(f"adopting toolbox {tb} left by an earlier bootstrap")
-            if not self.eval(f'$object_utils:has_property({tb}, "registry")'):
-                self.eval(f'add_property({tb}, "registry", [], {{player, "r"}})')
-            if self.eval('$object_utils:has_property(player, "tmoo")'):
-                self.client.call_tool("set_prop", {"object": str(player), "prop": "tmoo", "value": str(tb)})
             else:
-                self.eval(f'add_property(player, "tmoo", {tb}, {{player, "r"}})')
+                parent = self.core.get("toolbox_parent", "$thing")
+                tb = self.eval(f"create({parent})")
+                log(f"created toolbox {tb} from {parent}")
+            if TOOLBOX_PROP in self.eval("properties(player)"):
+                self.transport.set_prop("player", TOOLBOX_PROP, tb)
+            else:
+                self.eval(f'add_property(player, "{TOOLBOX_PROP}", {tb}, {{player, "r"}})')
         self._toolbox = tb
+        if "registry" not in self.eval(f"properties({tb})"):
+            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}}}, {{player, "r"}})')
         for name in HELPER_VERBS:
-            code = (HELPER_DIR / f"{name}.moo").read_text()
-            exists = self.eval(f'$object_utils:has_verb({tb}, "{name}")')
-            r = self.client.set_verb(str(tb), name, code, create=not exists, permissions="rxd",
-                                     dobj="this", prep="none", iobj="this")
-            log(f"{'updated' if exists else 'installed'} {tb}:{name}: {r.strip()}")
+            code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
+            r = self.transport.install_verb(tb, name, code)
+            log(f"{tb}:{name} {r}")
+        existing = self.eval(f"verbs({tb})")
+        for name in LEGACY_VERBS:
+            if name in existing:
+                self.eval(f'delete_verb({tb}, "{name}")')
+                log(f"removed {tb}:{name}")
+        # The registry as tmoo_apply keeps it: a terramoo map is converted once.
+        raw = self.eval(f"{tb}.registry")
+        if not (isinstance(raw, list) and len(raw) == 2):
+            reg = registry_value(raw)
+            self.transport.set_prop(tb, "registry", [list(reg), list(reg.values())])
+            log(f"converted the registry ({len(reg)} entries) to lists")
+        if self.eval(f"{tb}.name") != TOOLBOX_NAME:
+            self.transport.set_prop(tb, "name", TOOLBOX_NAME)
         return tb
 
     def _find_orphan_toolbox(self) -> Obj | None:
-        """A toolbox a failed bootstrap created but never hooked to the player."""
-        owned = [from_json(o) for o in self.eval("player.owned_objects")]
-        if not owned:
+        """A toolbox a failed bootstrap created but never hooked to the player.
+        Only findable where the core keeps `owned_objects`; the helpers are
+        not installed yet, so this asks directly."""
+        try:
+            owned = self.eval("player.owned_objects")
+        except MooError:
             return None
-        names = self.eval("$list_utils:map_prop({" + ", ".join(map(str, owned)) + '}, "name")')
-        for o, n in zip(owned, names):
-            if n == TOOLBOX_NAME:
-                return o
+        for o in owned if isinstance(owned, list) else []:
+            try:
+                if self.eval(f"{o}.name") in (TOOLBOX_NAME, LEGACY_TOOLBOX_NAME):
+                    return o
+            except MooError:
+                continue
         return None
 
     def read_registry(self) -> dict[str, Obj]:
-        raw = self.eval(f"{self.toolbox}.registry")
-        if not isinstance(raw, dict):
-            return {}
-        return {k: from_json(v) for k, v in raw.items()}
+        return registry_value(self.eval(f"{self.toolbox}.registry"))
 
     def read_sysrefs(self) -> dict[str, Obj]:
-        raw = self.eval(f"{self.toolbox}:tmoo_sysrefs()")
-        return {name: from_json(obj) for name, obj in raw}
+        return {name: obj for name, obj in self.eval(self.helper("tmoo_sysrefs"))}
 
     def refs(self) -> Refs:
         return Refs(player=self.player, registry=self.read_registry(), sysrefs=self.read_sysrefs())

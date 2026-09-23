@@ -2,7 +2,7 @@ import pytest
 
 from terramoo import moolit, objdef
 from terramoo.model import ObjectDef, PropDef, VerbDef
-from terramoo.moolit import Err, Map, Obj, Ref
+from terramoo.moolit import Err, Map, Obj, Ref, Sym
 
 
 @pytest.mark.parametrize(
@@ -15,6 +15,9 @@ from terramoo.moolit import Err, Map, Obj, Ref
         ("#130", Obj(130)),
         ("#-1", Obj(-1)),
         ("E_PERM", Err("E_PERM")),
+        ("#048D05-1234567890", Obj("048D05-1234567890")),
+        ("'sym", Sym("sym")),
+        ("true", True),
         ("{}", []),
         ('{1, "two", #3, {4}}', [1, "two", Obj(3), [4]]),
         ('["k" -> 1, 2 -> "v"]', Map({"k": 1, 2: "v"})),
@@ -108,3 +111,16 @@ def test_verb_code_blank_lines_survive():
 def test_prop_value_with_semicolon_in_string():
     obj = ObjectDef(key="t", name="t", parent=Obj(1), props=[PropDef(name="p", value="a; b")])
     assert objdef.parse(objdef.render(obj)).props[0].value == "a; b"
+
+
+def test_ordered_like_keeps_the_file_order_and_appends_new_ones():
+    from terramoo.model import ordered_like
+
+    live = ObjectDef(key="x", name="x", parent=Obj(1),
+                     props=[PropDef("c", 1), PropDef("new", 2), PropDef("a", 3)],
+                     verbs=[VerbDef("z", []), VerbDef("y", [])])
+    file = ObjectDef(key="x", name="x", parent=Obj(1), props=[PropDef("a", 0), PropDef("c", 0)],
+                     verbs=[VerbDef("y", []), VerbDef("z", [])])
+    ordered_like(live, file)
+    assert [p.name for p in live.props] == ["a", "c", "new"]
+    assert [v.key for v in live.verbs] == ["y", "z"]

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from . import moolit
 from .model import ObjectDef, PropDef, VerbDef, normalize_flags
-from .moolit import Obj, from_json
+from .moolit import Obj
 from .refs import Refs
 from .world import World
 
-CHUNK = 8  # objects per helper call; well inside the gate's 8 s budget
+CHUNK = 8  # objects per helper call; well inside a hosted gate's 8 s budget
 
 
-def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef]:
+def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | None]:
     """Export the registry objects named by `keys`.  Objects the registry
     names but the MOO no longer has come back as `None`."""
     by_obj = {refs.registry[k]: k for k in keys}
@@ -19,51 +19,41 @@ def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef]:
     out: dict[str, ObjectDef | None] = {}
     for i in range(0, len(objs), CHUNK):
         batch = objs[i:i + CHUNK]
-        expr = f"{world.toolbox}:tmoo_export({moolit.serialize(batch)})"
-        for rec in world.eval(expr):
-            o = from_json(rec["obj"])
-            key = by_obj[o]
-            out[key] = None if "error" in rec else _to_def(key, rec, refs, world.ignore_props)
+        for rec in world.eval(world.helper("tmoo_export", moolit.serialize(batch))):
+            key = by_obj[rec[0]]
+            out[key] = None if len(rec) == 1 else _to_def(key, rec, refs, world.ignore_props)
     return out
 
 
-def _owner(value, refs: Refs):
-    o = from_json(value)
+def _owner(o: Obj, refs: Refs):
     return None if o == refs.player else refs.symbolize_obj(o)
 
 
-def _to_def(key: str, rec: dict, refs: Refs, ignore: set[str]) -> ObjectDef:
+def _to_def(key: str, rec: list, refs: Refs, ignore: set[str]) -> ObjectDef:
+    obj_num, name, parent, location, owner, flags, props, verbs = rec
     obj = ObjectDef(
         key=key,
-        name=rec["name"],
-        parent=refs.symbolize_obj(from_json(rec["parent"])),
-        location=refs.symbolize_obj(from_json(rec["location"])),
-        owner=_owner(rec["owner"], refs),
-        flags=normalize_flags(rec["flags"]),
-        obj=from_json(rec["obj"]),
+        name=name,
+        parent=refs.symbolize_obj(parent),
+        location=refs.symbolize_obj(location),
+        owner=_owner(owner, refs),
+        flags=normalize_flags(flags),
+        obj=obj_num,
     )
-    for p in rec["props"]:
-        if p["name"] in ignore:
+    for pname, defined, powner, perms, literal in props:
+        if pname in ignore:
             continue
         obj.props.append(
             PropDef(
-                name=p["name"],
-                value=refs.symbolize(moolit.parse(p["value"])),
-                perms=p["perms"],
-                owner=_owner(p["owner"], refs),
-                defined=bool(p["defined"]),
+                name=pname,
+                value=refs.symbolize(moolit.parse(literal)),
+                perms=perms,
+                owner=_owner(powner, refs),
+                defined=bool(defined),
             )
         )
-    for v in rec["verbs"]:
-        obj.verbs.append(
-            VerbDef(
-                names=v["names"],
-                code=list(v["code"]),
-                args=tuple(v["args"]),
-                perms=v["perms"],
-                owner=_owner(v["owner"], refs),
-            )
-        )
+    for names, vowner, perms, args, code in verbs:
+        obj.verbs.append(VerbDef(names=names, code=list(code), args=tuple(args), perms=perms, owner=_owner(vowner, refs)))
     return obj
 
 

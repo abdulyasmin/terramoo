@@ -30,23 +30,28 @@ class Refs:
 
     # ----- one direction: files -> MOO
 
-    def resolve_ref(self, ref):
+    def resolve_ref(self, ref, *, live: bool = False):
+        """`live` resolves a value read from the MOO: a key being recreated
+        is still its old, recycled number there.  A file's value resolves
+        to the key itself until the create has run."""
         if isinstance(ref, Ref):
             if ref.kind == "@":
                 if ref.name == "me":
                     return self.player
-                if ref.name in self.registry:
+                if live and ref.name in self.registry:
                     return self.registry[ref.name]
                 if ref.name in self.pending:
                     return ref
+                if ref.name in self.registry:
+                    return self.registry[ref.name]
                 raise UnresolvedRef(f"@{ref.name} is not in the registry")
             if ref.name in self.sysrefs:
                 return self.sysrefs[ref.name]
             raise UnresolvedRef(f"${ref.name} is not a corified object on this MOO")
         return ref
 
-    def resolve(self, value):
-        return walk(value, self.resolve_ref)
+    def resolve(self, value, *, live: bool = False):
+        return walk(value, lambda v: self.resolve_ref(v, live=live))
 
     # ----- the other: MOO -> files
 
@@ -73,7 +78,7 @@ class Refs:
         # Prefer the shortest $name when several point at one object.
         self._sys_by_obj = {}
         for n, o in sorted(self.sysrefs.items(), key=lambda kv: (len(kv[0]), kv[0])):
-            if o.num >= 0:  # $nothing, $ambiguous_match, $failed_match stay numbers
+            if not isinstance(o.num, int) or o.num >= 0:  # $nothing, $ambiguous_match, $failed_match stay numbers
                 self._sys_by_obj.setdefault(o, n)
 
 

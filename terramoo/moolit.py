@@ -4,6 +4,8 @@ Python side of the mapping:
 
     int / float / str          themselves
     #123                       Obj(123)
+    #048D05-1234567890         Obj("048D05-1234567890")  (mooR's UUID objects)
+    'name                      Sym("name")  (mooR's symbols)
     E_PERM                     Err("E_PERM")
     {1, "a"}                   list
     ["k" -> v]                 Map (an insertion-ordered dict; MOO sorts keys
@@ -27,12 +29,20 @@ class Map(dict):
     """A MOO map.  Distinct from dict so serialization can tell it apart."""
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True)
 class Obj:
-    num: int
+    num: int | str  # str: a mooR UUID object id
 
     def __str__(self) -> str:
         return f"#{self.num}"
+
+
+@dataclass(frozen=True)
+class Sym:
+    name: str
+
+    def __str__(self) -> str:
+        return f"'{self.name}"
 
 
 @dataclass(frozen=True, order=True)
@@ -65,7 +75,8 @@ _TOKEN = re.compile(
   | (?P<float>-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d+[eE][+-]?\d+)
   | (?P<int>-?\d+)
   | (?P<str>"(?:[^"\\]|\\.)*")
-  | (?P<obj>\#-?\d+)
+  | (?P<obj>\#[0-9A-Fa-f]{6}-[0-9A-Fa-f]{10}|\#-?\d+)
+  | (?P<sym>'[A-Za-z_][A-Za-z0-9_]*)
   | (?P<err>E_[A-Z_]+)
   | (?P<bool>true|false)(?![A-Za-z0-9_])
   | (?P<sysref>\$[A-Za-z_][A-Za-z0-9_]*)
@@ -123,7 +134,10 @@ def _parse_at(toks, i):
     if kind == "str":
         return _unescape(text), i + 1
     if kind == "obj":
-        return Obj(int(text[1:])), i + 1
+        ident = text[1:]
+        return Obj(ident if "-" in ident[1:] else int(ident)), i + 1
+    if kind == "sym":
+        return Sym(text[1:]), i + 1
     if kind == "err":
         return Err(text), i + 1
     if kind == "bool":
@@ -188,7 +202,7 @@ def serialize(value) -> str:
         return s if ("." in s or "e" in s or "n" in s) else s + ".0"
     if isinstance(value, str):
         return escape(value)
-    if isinstance(value, (Obj, Err, Ref)):
+    if isinstance(value, (Obj, Err, Ref, Sym)):
         return str(value)
     if isinstance(value, Map):
         return "[" + ", ".join(f"{serialize(_unkey(k))} -> {serialize(v)}" for k, v in value.items()) + "]"
@@ -208,24 +222,3 @@ def walk(value, fn):
     if isinstance(value, list):
         return [walk(v, fn) for v in value]
     return fn(value)
-
-
-def from_json(value):
-    """Convert a value the hosted MCP returned as native JSON.
-
-    The gate tags non-JSON types: objects come back as "#123" strings and
-    errors as "E_PERM" strings.  Ordinary strings that happen to look like
-    those are therefore ambiguous, which is why export asks the helper verb
-    for `toliteral()` text instead and only uses this for scalars it knows.
-    """
-    if isinstance(value, str):
-        if re.fullmatch(r"#-?\d+", value):
-            return Obj(int(value[1:]))
-        if re.fullmatch(r"E_[A-Z_]+", value):
-            return Err(value)
-        return value
-    if isinstance(value, list):
-        return [from_json(v) for v in value]
-    if isinstance(value, dict):
-        return Map((k, from_json(v)) for k, v in value.items())
-    return value
