@@ -55,12 +55,18 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     new_keys = [k for k in files if k not in refs.registry or live.get(k) is None]
     plan.gone = {k: refs.registry[k] for k in new_keys if k in refs.registry}
     refs.pending = set(new_keys)
-    ordered = _topo(new_keys, files)
+    ordered, cyclic = _topo(new_keys, files)
+    for key in sorted(cyclic):
+        plan.problems.append(f"{key}: its parent chain loops back to itself")
+        broken.add(key)
     for key in ordered:
-        if key in broken:
-            continue
         obj = files[key]
         parent = obj.parent
+        if isinstance(parent, Ref) and parent.kind == "@" and parent.name in broken and key not in broken:
+            plan.problems.append(f"{key}: parent @{parent.name} cannot be created")
+            broken.add(key)
+        if key in broken:
+            continue
         if isinstance(parent, Ref) and parent.kind == "@" and parent.name in new_keys:
             parent_arg = parent.name
         else:
@@ -109,23 +115,25 @@ def _at_refs(obj: ObjectDef) -> set[str]:
     return found
 
 
-def _topo(keys: list[str], files: dict[str, ObjectDef]) -> list[str]:
-    out, seen = [], set()
+def _topo(keys: list[str], files: dict[str, ObjectDef]) -> tuple[list[str], set[str]]:
+    """`keys` parents first, and the keys whose parent chain is a loop."""
+    out, seen, cyclic = [], set(), set()
 
     def visit(k, stack):
         if k in seen:
             return
         if k in stack:
-            raise ValueError(f"parent cycle through {k}")
+            cyclic.update(stack[stack.index(k):])
+            return
         parent = files[k].parent
         if isinstance(parent, Ref) and parent.kind == "@" and parent.name in files and parent.name in keys:
-            visit(parent.name, stack | {k})
+            visit(parent.name, stack + [k])
         seen.add(k)
         out.append(k)
 
     for k in keys:
-        visit(k, frozenset())
-    return out
+        visit(k, [])
+    return out, cyclic
 
 
 def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -> list[tuple]:

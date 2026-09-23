@@ -144,3 +144,21 @@ def test_reference_to_a_recreated_object_waits_for_its_new_number():
     p = plan.build(files, live, r)
     assert [c[0] for c in p.creates] == ["door"]
     assert ("setprop", Ref("@", "hall"), "to", Ref("@", "door")) in p.ops
+
+
+def test_parent_cycle_is_a_problem_not_a_crash():
+    r = refs()
+    files = {
+        "a": ObjectDef(key="a", name="A", parent=Ref("@", "b")),
+        "b": ObjectDef(key="b", name="B", parent=Ref("@", "a")),
+        "child": ObjectDef(key="child", name="Child", parent=Ref("@", "a")),
+        "hall": room(),
+    }
+    p = plan.build(files, {}, r)
+    assert p.problems == [
+        "a: its parent chain loops back to itself",
+        "b: its parent chain loops back to itself",
+        "child: parent @a cannot be created",
+    ]
+    assert [c[0] for c in p.creates] == ["hall"]
+    assert all(op[1] == Ref("@", "hall") for op in p.ops if op[0] != "link")
