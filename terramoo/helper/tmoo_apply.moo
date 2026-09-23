@@ -1,5 +1,5 @@
 ":tmoo_apply(ops [, may_suspend]) => one result per op: {1, value} or {0, \"E_NAME\", message}.";
-"Every op is a list whose first element names it; see terramoo/apply.py for the table.";
+"Every op is a list whose first element names it: terramoo/plan.py (diff_object) makes them, the branches below run them.";
 "The registry is {keys, objects}, two parallel lists (no maps: this runs on LambdaMOO 1.8),";
 "and is written back after every change so a crash mid-apply leaves the MOO knowing what it made.";
 if (caller_perms() != this.owner && !caller_perms().wizard)

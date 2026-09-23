@@ -515,10 +515,9 @@ pull is byte-exact, so the rendering has to stay deterministic.
 - **No newlines in any value sent over telnet.** MOO literals have no
   newline escape, so `_request` raises. A string property containing
   `\n` can't be applied over telnet.
-- **The stale pointer in `tmoo_apply`.** Line 2 says "see
-  terramoo/apply.py for the table", but the op vocabulary is really
-  defined by `plan.diff_object` (producer) and the helper's own branches
-  (consumer).
+- **The op vocabulary has no single table.** It is defined twice: by
+  `plan.diff_object` (producer) and by `tmoo_apply`'s branches (consumer).
+  A new op kind needs both.
 - **Only `MooError` is caught at the CLI.** Any other exception that
   escapes a command is a traceback, so user mistakes must become a
   `MooError` or a plan problem (as a parent loop and a bad `adopt`
