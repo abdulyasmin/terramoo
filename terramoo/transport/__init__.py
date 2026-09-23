@@ -1,19 +1,10 @@
-"""How `tmoo` reaches a MOO: one interface, several wires.
+"""How `tmoo` reaches a MOO: `telnet` (any MOO, logged in as a programmer)
+or `mcp` (a hosted gate with an `eval` tool).
 
-A transport evaluates MOO expressions as the player and hands back the
-value as Python (`moolit` types: int, float, str, `Obj`, `Err`, list,
-`Map`).  An error raised in the MOO comes back as `MooError`.  Everything
-else `tmoo` does is built from `eval`, so a transport only has to get an
-expression there and its `toliteral()` back.
-
-    telnet   log in as the player on the game port (plain or TLS) and use
-             the core's `;` eval; works on any MOO where the player is a
-             programmer (LambdaMOO, ToastStunt, mooR, ...)
-    mcp      a hosted MCP server exposing an `eval` tool
-
-Expressions sent through `eval` stay single expressions with no
-statements, backquotes or assignments, so they run on either wire; the
-work with loops lives in the helper verbs (`terramoo/helper/`).
+A transport evaluates one MOO expression as the player and returns its
+value as `moolit` types, raising `MooError` for anything the MOO raises.
+Everything else is built on `eval`; a transport overrides `set_prop` and
+`install_verb` when it has a better way.
 """
 
 from __future__ import annotations

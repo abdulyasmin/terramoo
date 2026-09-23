@@ -1,15 +1,10 @@
-"""A hosted MCP server with an `eval` tool.
+"""A hosted MCP server with an `eval` tool, over stateless Streamable HTTP:
+one JSON-RPC call per request with the player's Bearer token, answered as
+SSE or plain JSON.
 
-The server is stateless Streamable HTTP: every request is one JSON-RPC
-call with the player's Bearer token, and the answer comes back as an SSE
-`data:` line or a plain JSON body.  Nothing here holds a session.
-
-Every expression is sent wrapped in `toliteral()`, so the answer is one
-string of MOO literal text whatever the gate does to native values, and
-it parses the same way the telnet transport's does.  Tool names are
-configurable in `[connection]` (`eval_tool`, `set_verb_tool`,
-`set_prop_tool`); set the latter two to "" on a server without them and
-the builtins are used instead.
+Expressions are wrapped in `toliteral()`, so the answer parses the way
+telnet's does.  Tool names come from `[connection]`; `set_verb_tool` or
+`set_prop_tool` set to "" falls back to the builtins.
 """
 
 from __future__ import annotations

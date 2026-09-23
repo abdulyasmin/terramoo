@@ -1,31 +1,10 @@
-"""The objdef file format: one object per file, readable and diffable.
+"""The objdef file format (README, "The file format"): one object per file,
+parsed into and rendered from an `ObjectDef`.
 
-    object grand_courtyard
-      name: "Grand Courtyard"
-      parent: $room
-      location: @gatehouse          # omitted when nowhere (#-1)
-      owner: #2                     # omitted when the player owns it
-      flags: "r"                    # subset of rwf; omitted when empty
-
-      property description (flags: "rc") = {"A broad court...", "..."};
-      property greeting (flags: "r", owner: #2) = "hello";
-      override arrival_msg = "The lions never stop pouring.";
-
-      verb bow (any none none) flags: "rd"
-        player:tell("You bow.");
-      endverb
-    endobject
-
-`property` defines a property on this object; `override` sets a value on
-one inherited from an ancestor.  An inherited property with no `override`
-line is clear (inherits its value).  Values are MOO literals, plus `$name`
-for corified objects and `@name` for objects in the registry (`@me` is the
-player).  Verb code is indented four spaces; the MOO's own two-space
-unparse indent sits inside that, so a file diff is a code diff.
-
-The shape follows mooR's objdef export so a repo in this format can be
-read by either server; the keywords mooR spells differently (`override`
-is ours, mooR writes every property the same way) are the only divergence.
+Rendering is deterministic and line-oriented so a file diff is a code diff:
+verb code keeps the MOO's two-space unparse indent inside our four, and a
+list of strings goes one element per line.  `location` and `owner` are
+omitted when nowhere or the player.
 """
 
 from __future__ import annotations

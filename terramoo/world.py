@@ -1,30 +1,10 @@
-"""A world: one MOO, one player, one directory of object files.
-
-    worlds/<name>/world.toml      connection, player, core settings
-    worlds/<name>/objects/*.moo   one objdef file per managed object
-    worlds/<name>/state.json      mirror of the in-MOO registry
-
-`world.toml`:
-
-    player = "alice"
-
-    [connection]
-    transport = "telnet"          # or "mcp"
-    host = "moo.example.org"
-    port = 7777
-    tls = false
-    # login, eval_prefix, tell, chunk, timeout, batch_bytes: see
-    # terramoo/transport/telnet.py
-
-    [core]
-    toolbox_parent = "$thing"     # what the toolbox is created from
-
-    ignore_props = []             # beyond DEFAULT_IGNORE_PROPS
-    keep_props = []               # re-enable one of those
+"""A world: one MOO, one player, one directory, `worlds/<name>/`, holding
+`world.toml` (see README), `objects/*.moo` and `state.json`, a copy of the
+in-MOO registry.
 
 The toolbox is an object the player owns, reached as `player.tmoo`,
-holding the registry and the helper verbs (`terramoo/helper/*.moo`).  It
-is the only thing `tmoo` creates that the files do not describe.
+holding the registry and the helper verbs.  It is the only thing `tmoo`
+creates that the files do not describe.
 """
 
 from __future__ import annotations

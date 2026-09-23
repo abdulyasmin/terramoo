@@ -13,10 +13,9 @@ Python side of the mapping:
     true / false               bool (ToastStunt)
     $room / @grand_courtyard   Ref("$", "room") / Ref("@", "grand_courtyard")
 
-The two `Ref` spellings are this repo's, not MOO's: `$name` is a corified
-object (`#0.name`) and `@name` an object the registry names.  They are
-resolved to `Obj` before anything reaches the MOO and produced from `Obj`
-on export, so a file never depends on an object number it does not have to.
+`Ref` is this repo's, not MOO's: `$name` is `#0.name`, `@name` a registry
+key.  Refs are resolved before anything reaches the MOO (`refs.resolve`)
+and produced on export, so files avoid object numbers.
 """
 
 from __future__ import annotations

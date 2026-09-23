@@ -1,10 +1,9 @@
 # terramoo
 
-A MOO player's objects as files, on any MOO. `worlds/<world>/objects/*.moo` is
-the source of truth for what one player owns; `tmoo apply` makes the MOO match
-the files, and `tmoo pull` brings live edits back into them. Every call runs as
-that player, so the tool can do exactly what they could do from `;` eval and
-nothing more. The player has to be a programmer, and doesn't need to be a wizard.
+A MOO player's objects as files, on any MOO. `worlds/<world>/objects/*.moo`
+is the source of truth for what one player owns: `tmoo apply` makes the MOO
+match the files, and `tmoo pull` brings live edits back. Everything runs as
+that player, who must be a programmer but needn't be a wizard.
 
 Tested against LambdaMOO 1.8.1 (LambdaCore), ToastStunt 2.7 (ToastCore) and
 mooR 1.0 (lambda-moor), over telnet, or through a hosted MCP gate with an `eval`
@@ -23,11 +22,10 @@ tmoo apply [--destroy]   # MOO <- files (asks first; -y skips; --destroy recycle
 tmoo diff [key...]       # unified diff, live rendering against the files
 ```
 
-Install with `uv tool install git+<this repo's URL>`, or
-depend on it from a repo holding your worlds (see that repo's `pyproject.toml`).
-`tmoo` looks for the nearest `worlds/` directory above the current one
-(`$TMOO_ROOT` overrides), and picks the only world there, or `--world` /
-`$TMOO_WORLD`.
+Install with `uv tool install git+<this repo's URL>`, or add it as a
+dependency of a repo that holds your worlds. `tmoo` uses the nearest
+`worlds/` directory at or above the current one (`$TMOO_ROOT` overrides) and
+the only world in it, or `--world` / `$TMOO_WORLD`.
 
 ## Worlds
 
@@ -45,6 +43,7 @@ tls = false
 # eval_prefix = ";;"                     the core's statement eval
 # tell = "notify(player, {})"            how answers are printed
 # timeout = 120                          seconds of silence before giving up
+# connect_timeout, chunk, batch_bytes    see terramoo/transport/telnet.py
 
 # [connection] for a hosted MCP gate:
 #   transport = "mcp"
@@ -108,38 +107,21 @@ world; `override` is the one keyword of ours.
 
 ## How it works
 
-- **Transports** (`terramoo/transport/`). `telnet` logs in on the game port
-  (plain or TLS) and runs each request as one `;;` eval line. The code it
-  sends tags every line of its answer with a tag made up for that request,
-  so other players' chatter, the core's `=>` echo and pages are ignored. A
-  sentinel command sent right after the request tells a compile error apart
-  from a slow answer. `mcp` calls a hosted gate's `eval` tool. Both return
-  `toliteral()` text, which `terramoo/moolit.py` parses.
-- **Toolbox.** An object the player owns, reached as `player.tmoo`, carrying
-  the registry and four helper verbs from `terramoo/helper/`:
-  - `tmoo_export`: whole objects in one call
-  - `tmoo_apply`: a batch of ops, one result each
-  - `tmoo_sysrefs`: the `$name` table
-  - `tmoo_info`: names, owned objects and the server version
-
-  The helpers are written in plain LambdaMOO 1.8, with no maps, no
-  `ancestors()` and no core utilities, so one copy runs on every server. They
-  refuse any caller but their owner. `tmoo bootstrap` reinstalls them.
-- **Registry.** `key -> #nnn` lives in the MOO on the toolbox, as two
-  parallel lists, and is mirrored to `worlds/<world>/state.json`. If the MOO
-  is rolled back, the registry rolls back with it, and `plan` simply sees
-  what is missing.
-- **Plan** (`terramoo/plan.py`: pure, tested). The files and the live export
-  are both read into `ObjectDef`s, references are resolved to numbers on both
-  sides, and the two are diffed into ops. Creates go first, parents before
-  children, so a file can name an object another file creates. A `@ref` to a
-  key with no file is a problem, reported before anything runs.
-- **Apply.** Ops are sent as MOO literals, one eval per batch. A failed op
-  is reported and the rest carry on. Nothing is recycled without
-  `--destroy`. A registry object the MOO has lost is recreated from its file,
-  and the plan labels it as such. New objects are read back after the create
-  phase and diffed again, so whatever the core's `initialize` set on them
-  (LambdaCore's `key = 0`) is corrected in the same run.
+- `tmoo bootstrap` creates a *toolbox*, an object the player owns reached as
+  `player.tmoo`, and installs four helper verbs on it from
+  `terramoo/helper/`. They are plain LambdaMOO 1.8, so one copy runs on
+  every server, and they refuse any caller but their owner.
+- The toolbox holds the *registry*, `key -> #nnn`. It lives in the MOO, so a
+  rollback rolls it back too; `worlds/<world>/state.json` is a local copy.
+- `plan` diffs the files against the live objects. A `@ref` to a key with no
+  file is reported before anything runs.
+- `apply` creates new objects parents first (recreating any the MOO has
+  lost), re-reads them to correct what the core's `initialize` set, then
+  sends the rest in batches. A failed op is reported and the rest carry on.
+  Nothing is recycled without `--destroy`.
+- Both transports send one expression per request and parse its
+  `toliteral()` text. Telnet tags its answer so other players' chatter is
+  ignored (see `terramoo/transport/telnet.py`).
 
 ## Portability notes
 

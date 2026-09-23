@@ -1,14 +1,9 @@
-"""Logging in on the game port and asking with the core's `;;` eval.
+"""Logging in on the game port (plain or TLS) and asking with `;;` eval.
 
-Anything a programmer can type works here, so this is the transport that
-goes everywhere: LambdaMOO with LambdaCore, ToastStunt with ToastCore,
-mooR, and the rest of the family, over plain telnet or TLS.
-
-The hard part is hearing the answer.  A MOO connection is one stream of
-lines, and other players, the core's own `=> ...` echo and anything a
-suspended task prints later all arrive in it.  So the evaluated code tags
-its own output with a tag made up for that one request, and every other
-line is ignored:
+A connection is one stream of lines: other players, the core's `=> ...`
+echo and late output from suspended tasks all arrive in it.  So the code
+sent tags its own output with a tag made up for that request, and every
+other line is ignored:
 
     ~tag~S              the code started (it compiled)
     ~tag~B<length>      the value follows, as toliteral() text of that length
