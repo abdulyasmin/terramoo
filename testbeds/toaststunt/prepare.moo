@@ -1,0 +1,3 @@
+;;for spec in ({{"wiz", 1}, {"tester", 0}}) {name, wizzy} = spec; who = $player_db:find_exact(name); if (!valid(who)) who = $wiz_utils:make_player(name, name + "@localhost")[1]; endif who.password = $login:encrypt_password(name); if (wizzy) if (!$object_utils:isa(who, $wiz)) chparent(who, $wiz); endif who.wizard = 1; who.programmer = 1; else $wiz_utils:set_programmer(who); who.wizard = 0; endif who.ownership_quota = 100000; endfor return 1;
+;;r = {}; for name in ({"wiz", "tester"}) p = $player_db:find_exact(name); r = {@r, {p, p.name, p.wizard, p.programmer, parent(p), p.ownership_quota}}; endfor return r;
+quit

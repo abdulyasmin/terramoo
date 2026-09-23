@@ -1,0 +1,21 @@
+# moor-daemon config for this testbed (mooR 1.0.2).
+# Feature flags are mooR's own defaults (LambdaMOO/ToastStunt-compatible):
+# numbered objects (#123), 0/1 from builtins, classic error set.
+# mooR's dev profile flips use_boolean_returns, use_symbols_in_builtins,
+# custom_errors and use_uuobjids to true; change them here and run
+# `./setup.sh --reset` to test against that mode instead.
+features:
+  persistent_tasks: true
+  rich_notify: true
+  lexical_scopes: true
+  type_dispatch: true
+  flyweight_type: true
+  list_comprehensions: true
+  bool_type: true
+  symbol_type: true
+  use_boolean_returns: false
+  use_symbols_in_builtins: false
+  custom_errors: false
+  use_uuobjids: false
+  enable_eventlog: false
+  anonymous_objects: false
