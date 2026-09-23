@@ -12,76 +12,60 @@ out = {};
 for op in (ops)
   try
     kind = op[1];
-    if (kind == "create")
-      "op[3] is the parent: an object, or the registry key of one created earlier in this batch.";
-      p = op[3];
-      if (typeof(p) == typeof(""))
-        i = p in reg[1];
-        p = i ? reg[2][i] | E_INVARG;
-        if (typeof(p) == typeof(E_NONE))
-          raise(E_INVARG, tostr("no parent ", op[3], " in the registry"));
+    r = 1;
+    if (kind == "create" || kind == "register")
+      if (kind == "create")
+        "op[3] is the parent: an object, or the registry key of one created earlier in this batch.";
+        p = op[3];
+        if (typeof(p) == typeof(""))
+          i = p in reg[1];
+          if (!i)
+            raise(E_INVARG, tostr("no parent ", p, " in the registry"));
+          endif
+          p = reg[2][i];
         endif
+        r = create(p);
+        r.name = op[4];
+      else
+        r = op[3];
       endif
-      o = create(p);
-      o.name = op[4];
       i = op[2] in reg[1];
       if (i)
-        reg[2][i] = o;
+        reg[2][i] = r;
       else
-        reg = {{@reg[1], op[2]}, {@reg[2], o}};
+        reg = {{@reg[1], op[2]}, {@reg[2], r}};
       endif
       this.registry = reg;
-      r = o;
     elseif (kind == "recycle")
       recycle(op[2]);
-      r = 1;
-    elseif (kind == "register")
-      i = op[2] in reg[1];
-      if (i)
-        reg[2][i] = op[3];
-      else
-        reg = {{@reg[1], op[2]}, {@reg[2], op[3]}};
-      endif
-      this.registry = reg;
-      r = op[3];
     elseif (kind == "unregister")
       i = op[2] in reg[1];
       if (i)
         reg = {listdelete(reg[1], i), listdelete(reg[2], i)};
         this.registry = reg;
       endif
-      r = 1;
     elseif (kind == "name")
       op[2].name = op[3];
-      r = 1;
     elseif (kind == "chparent")
       chparent(op[2], op[3]);
-      r = 1;
     elseif (kind == "move")
       move(op[2], op[3]);
-      r = 1;
     elseif (kind == "flags")
       o = op[2];
       f = op[3];
       o.r = index(f, "r") > 0;
       o.w = index(f, "w") > 0;
       o.f = index(f, "f") > 0;
-      r = 1;
     elseif (kind == "addprop")
       add_property(op[2], op[3], op[4], op[5]);
-      r = 1;
     elseif (kind == "rmprop")
       delete_property(op[2], op[3]);
-      r = 1;
     elseif (kind == "propinfo")
       set_property_info(op[2], op[3], op[4]);
-      r = 1;
     elseif (kind == "setprop")
       op[2].(op[3]) = op[4];
-      r = 1;
     elseif (kind == "clearprop")
       clear_property(op[2], op[3]);
-      r = 1;
     elseif (kind == "addverb" || kind == "verbcode")
       if (kind == "addverb")
         add_verb(op[2], op[3], op[4]);
@@ -96,16 +80,12 @@ for op in (ops)
         endfor
         raise(E_INVARG, tostr("compile error: ", msg));
       endif
-      r = 1;
     elseif (kind == "rmverb")
       delete_verb(op[2], op[3]);
-      r = 1;
     elseif (kind == "verbinfo")
       set_verb_info(op[2], op[3], op[4]);
-      r = 1;
     elseif (kind == "verbargs")
       set_verb_args(op[2], op[3], op[4]);
-      r = 1;
     elseif (kind == "link")
       "Attach every exit among the objects to its source and destination rooms, LambdaCore style.";
       "A core with no $exit, or exits that work differently, simply links nothing.";
