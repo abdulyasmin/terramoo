@@ -98,7 +98,7 @@ class _Wire:
             self.sock.settimeout(left)
             try:
                 chunk = self.sock.recv(65536)
-            except (TimeoutError, socket.timeout):
+            except TimeoutError:
                 return None
             except ssl.SSLWantReadError:
                 continue
@@ -176,12 +176,6 @@ class Telnet(Transport):
 
     # ----- connection
 
-    @property
-    def wire(self) -> _Wire:
-        if self._wire is None:
-            self._open()
-        return self._wire
-
     def _open(self) -> None:
         try:
             sock = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
@@ -225,7 +219,8 @@ class Telnet(Transport):
         # up in between.  Never mid-request: that could run an op twice.
         if self._wire is not None and self._wire.closed():
             self.close()
-        self.wire
+        if self._wire is None:
+            self._open()
         return self._request(expression, self.timeout)
 
     def _tell(self, what: str) -> str:
@@ -299,7 +294,7 @@ class Telnet(Transport):
         if kind == "X":
             try:
                 code, msg = moolit.parse(text)
-            except (moolit.LiteralError, ValueError):
+            except ValueError:
                 raise MooError(text) from None
             raise MooError(f"{code}: {msg}")
         try:

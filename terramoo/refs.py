@@ -38,12 +38,10 @@ class Refs:
             if ref.kind == "@":
                 if ref.name == "me":
                     return self.player
-                if live and ref.name in self.registry:
+                if ref.name in self.registry and (live or ref.name not in self.pending):
                     return self.registry[ref.name]
                 if ref.name in self.pending:
                     return ref
-                if ref.name in self.registry:
-                    return self.registry[ref.name]
                 raise UnresolvedRef(f"@{ref.name} is not in the registry")
             if ref.name in self.sysrefs:
                 return self.sysrefs[ref.name]
@@ -83,14 +81,6 @@ class Refs:
 
 
 # ----- state file
-
-
-def load_state(path: Path) -> tuple[Obj | None, dict[str, Obj]]:
-    if not path.exists():
-        return None, {}
-    data = json.loads(path.read_text())
-    player = Obj(data["player"]) if "player" in data else None
-    return player, {k: Obj(v) for k, v in data.get("registry", {}).items()}
 
 
 def save_state(path: Path, player: Obj, registry: dict[str, Obj], toolbox: Obj | None) -> None:

@@ -1,4 +1,4 @@
-"""Tiny line client for the mooR telnet host, used by setup.sh and probe.py.
+"""Tiny line client for the mooR telnet host, used by provision.py.
 
 Stdlib only. Commands are bracketed with PREFIX/SUFFIX markers so each
 command's output can be read back exactly, without timing guesses.
@@ -34,7 +34,6 @@ class Moo:
 
     def drain(self, quiet=0.7):
         """Read until the server has been silent for `quiet` seconds."""
-        out = b""
         while True:
             deadline = time.monotonic() + quiet
             if not self._fill(deadline):
@@ -61,21 +60,18 @@ class Moo:
             raise RuntimeError(f"login as {name} failed:\n{text}")
         return text
 
-    def cmd(self, line, timeout=None):
-        """Run one command line; return its output lines (markers stripped)."""
+    def eval(self, expr, timeout=None):
+        """Run `;expr`; return its output lines (markers stripped)."""
         tag = uuid.uuid4().hex[:12]
         pre, suf = f"<<pre-{tag}>>", f"<<suf-{tag}>>"
         self.send(f"PREFIX {pre}")
         self.send(f"SUFFIX {suf}")
-        self.send(line)
+        self.send(";" + expr)
         self.read_until(pre, timeout)
         body = self.read_until(suf, timeout)
         self.send("PREFIX")
         self.send("SUFFIX")
         return [l for l in body.replace("\r", "").split("\n") if l != ""]
-
-    def eval(self, expr, timeout=None):
-        return self.cmd(";" + expr, timeout)
 
     def close(self):
         try:

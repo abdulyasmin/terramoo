@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import moolit
-from .moolit import Obj, Ref, walk
+from .moolit import Ref
 from .plan import Plan, describe, diff_object
 from .refs import Refs
 from .world import World
@@ -23,25 +23,13 @@ class Outcome:
     done: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
 
-    @property
-    def ok(self) -> bool:
-        return not self.failed
-
 
 def _resolve_op(op: tuple, refs: Refs) -> list:
-    def leaf(v):
-        if isinstance(v, Ref):
-            return refs.resolve_ref(v)
-        return v
-
-    kind = op[0]
-    if kind == "create":
-        key, parent, name = op[1], op[2], op[3]
-        # parent may be a str: a key made earlier in this batch
-        return ["create", key, parent if isinstance(parent, str) else refs.resolve_ref(parent), name]
-    if kind == "link":
+    """The op with every `Ref` turned into a number.  A create's parent may
+    be a plain key string, made earlier in the same batch; it passes through."""
+    if op[0] == "link":
         return ["link", [refs.resolve_ref(r) for r in op[1] if r.name in refs.registry]]
-    return [kind, *[walk(v, leaf) if not isinstance(v, tuple) else list(v) for v in op[1:]]]
+    return [op[0], *(refs.resolve(v) for v in op[1:])]
 
 
 def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> None:
@@ -90,10 +78,9 @@ def _replan_created(world: World, plan_ops: list[tuple], created: list[str], fil
     return [op for op in kept if op[0] != "link"] + fresh + links
 
 
-def run(world: World, plan: Plan, refs: Refs, *, files: dict | None = None, destroy: bool = False,
-        log=print) -> Outcome:
-    """Apply `plan`.  Given the `files` it was made from, the objects it
-    creates are re-read once they exist and diffed again."""
+def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = False, log=print) -> Outcome:
+    """Apply `plan`, made from `files`.  The objects it creates are re-read
+    once they exist and diffed again."""
     outcome = Outcome()
     plan_ops = list(plan.ops)
     if plan.creates:
@@ -105,7 +92,7 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict | None = None, dest
         refs.pending = {k for k, _, _ in plan.creates if k not in refs.registry}
         refs.reindex()
         created = [k for k, _, _ in plan.creates if k in refs.registry]
-        if files and created:
+        if created:
             plan_ops = _replan_created(world, plan_ops, created, files, refs)
         # A key whose create failed now fails to resolve, so each op that
         # needs it is skipped instead of sending `@key` to the MOO.

@@ -38,7 +38,7 @@ from . import objdef
 from .errors import MooError
 from .model import ObjectDef
 from .moolit import Err, Obj, serialize
-from .refs import Refs, load_state, save_state
+from .refs import Refs, save_state
 from .secrets import secret_for
 from .transport import Transport, connect
 
@@ -92,12 +92,12 @@ DEFAULT_IGNORE_PROPS = {
 }
 
 
-def find_root(start: Path | None = None) -> Path:
+def find_root() -> Path:
     """The nearest directory with a `worlds/` in it, or `$TMOO_ROOT`."""
     env = os.environ.get("TMOO_ROOT")
     if env:
         return Path(env)
-    here = (start or Path.cwd()).resolve()
+    here = Path.cwd().resolve()
     for d in (here, *here.parents):
         if (d / "worlds").is_dir():
             return d
@@ -174,7 +174,7 @@ class World:
         for path in sorted(self.objects_dir.glob("*.moo")):
             try:
                 obj = objdef.parse(path.read_text())
-            except (objdef.FormatError, ValueError) as e:
+            except ValueError as e:  # FormatError and LiteralError are ValueErrors
                 raise MooError(f"{path.relative_to(self.root)}: {e}") from None
             if obj.key != path.stem:
                 raise MooError(f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}")
@@ -223,15 +223,15 @@ class World:
                 raise MooError(f"logged in as {name} ({who}), but world.toml says player = {self.player_name!r}")
         return self._player
 
-    def _toolbox_via(self, prop: str) -> Obj | None:
-        if self.eval(f'"{prop}" in properties(player) && valid(player.{prop})'):
-            return self.eval(f"player.{prop}")
+    def _find_toolbox(self) -> Obj | None:
+        if self.eval(f'"{TOOLBOX_PROP}" in properties(player) && valid(player.{TOOLBOX_PROP})'):
+            return self.eval(f"player.{TOOLBOX_PROP}")
         return None
 
     @property
     def toolbox(self) -> Obj:
         if self._toolbox is None:
-            tb = self._toolbox_via(TOOLBOX_PROP)
+            tb = self._find_toolbox()
             if tb is None:
                 raise MooError("no toolbox on this player yet: run `tmoo bootstrap`")
             self._toolbox = tb
@@ -243,9 +243,6 @@ class World:
         owned, version = self.eval(self.helper("tmoo_info"))
         return (None if isinstance(owned, Err) else list(owned)), version
 
-    def owned(self) -> list[Obj] | None:
-        return self.server_info()[0]
-
     def names(self, objs: list[Obj]) -> list[str]:
         if not objs:
             return []
@@ -253,8 +250,8 @@ class World:
 
     def bootstrap(self, log=print) -> Obj:
         """Find or create the toolbox and (re)install the helper verbs."""
-        self.player
-        tb = self._toolbox_via(TOOLBOX_PROP)
+        self.player  # checks the login matches world.toml
+        tb = self._find_toolbox()
         if tb is not None:
             log(f"toolbox is {tb}")
         else:
@@ -307,6 +304,3 @@ class World:
 
     def save_state(self, registry: dict[str, Obj]) -> None:
         save_state(self.state_path, self.player, registry, self._toolbox)
-
-    def load_state(self):
-        return load_state(self.state_path)

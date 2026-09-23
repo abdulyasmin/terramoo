@@ -62,9 +62,6 @@ class Ref:
         return f"{self.kind}{self.name}"
 
 
-NOTHING = Obj(-1)
-
-
 class LiteralError(ValueError):
     pass
 
@@ -111,18 +108,8 @@ def parse(text: str):
 
 
 def _unescape(s: str) -> str:
-    out = []
-    i = 1
-    end = len(s) - 1
-    while i < end:
-        c = s[i]
-        if c == "\\" and i + 1 < end:
-            out.append(s[i + 1])
-            i += 2
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
+    """A string token's contents: a backslash quotes the next character."""
+    return re.sub(r"\\(.)", r"\1", s[1:-1])
 
 
 def _parse_at(toks, i):
@@ -170,7 +157,7 @@ def _parse_at(toks, i):
             if toks[i][0] != "arrow":
                 raise LiteralError(f"expected -> in map, got {toks[i][1]!r}")
             v, i = _parse_at(toks, i + 1)
-            m[_key(k)] = v
+            m[tuple(k) if isinstance(k, list) else k] = v
             if toks[i] == ("punct", ","):
                 i += 1
                 continue
@@ -178,12 +165,6 @@ def _parse_at(toks, i):
                 return m, i + 1
             raise LiteralError(f"expected , or ] in map, got {toks[i][1]!r}")
     raise LiteralError(f"unexpected {text!r}")
-
-
-def _key(k):
-    if isinstance(k, list):
-        return tuple(k)
-    return k
 
 
 def escape(s: str) -> str:
@@ -198,21 +179,16 @@ def serialize(value) -> str:
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        s = repr(value)
-        return s if ("." in s or "e" in s or "n" in s) else s + ".0"
+        return repr(value)  # always has a point or an exponent, as MOO needs
     if isinstance(value, str):
         return escape(value)
     if isinstance(value, (Obj, Err, Ref, Sym)):
         return str(value)
     if isinstance(value, Map):
-        return "[" + ", ".join(f"{serialize(_unkey(k))} -> {serialize(v)}" for k, v in value.items()) + "]"
+        return "[" + ", ".join(f"{serialize(k)} -> {serialize(v)}" for k, v in value.items()) + "]"
     if isinstance(value, (list, tuple)):
         return "{" + ", ".join(serialize(v) for v in value) + "}"
     raise LiteralError(f"cannot serialize {type(value).__name__}")
-
-
-def _unkey(k):
-    return list(k) if isinstance(k, tuple) else k
 
 
 def walk(value, fn):

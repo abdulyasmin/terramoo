@@ -27,15 +27,13 @@ _TAGGED = re.compile(r"(.*\S)\s+\((?:OBJ|ERR|ANON|WAIF|STR)\)", re.S)
 
 
 class McpTransport(Transport):
-    can_suspend = False
-
     def __init__(self, url: str, token: str, *, eval_tool: str = "eval", set_verb_tool: str | None = "set_verb",
                  set_prop_tool: str | None = "set_prop", timeout: float = 90.0, batch_bytes: int = 24_000):
         self.url = url
         self.token = token
         self.eval_tool = eval_tool
-        self.set_verb_tool = set_verb_tool
-        self.set_prop_tool = set_prop_tool
+        self.set_verb_tool = set_verb_tool or None  # "" in world.toml: use the builtins
+        self.set_prop_tool = set_prop_tool or None
         self.timeout = timeout
         self.batch_bytes = batch_bytes
         self._id = 0
@@ -44,15 +42,8 @@ class McpTransport(Transport):
     def from_config(cls, conn: dict, secret: str) -> "McpTransport":
         if "url" not in conn:
             raise MooError("an mcp connection needs `url`")
-        return cls(
-            conn["url"],
-            secret,
-            eval_tool=conn.get("eval_tool", "eval"),
-            set_verb_tool=conn.get("set_verb_tool", "set_verb") or None,
-            set_prop_tool=conn.get("set_prop_tool", "set_prop") or None,
-            timeout=float(conn.get("timeout", 90)),
-            batch_bytes=int(conn.get("batch_bytes", 24_000)),
-        )
+        keys = ("eval_tool", "set_verb_tool", "set_prop_tool", "timeout", "batch_bytes")
+        return cls(conn["url"], secret, **{k: conn[k] for k in keys if k in conn})
 
     def rpc(self, method: str, params: dict) -> dict:
         self._id += 1

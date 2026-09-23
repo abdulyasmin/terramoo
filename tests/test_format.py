@@ -1,7 +1,7 @@
 import pytest
 
 from terramoo import moolit, objdef
-from terramoo.model import ObjectDef, PropDef, VerbDef
+from terramoo.model import ObjectDef, PropDef, VerbDef, ordered_like
 from terramoo.moolit import Err, Map, Obj, Ref, Sym
 
 
@@ -21,7 +21,6 @@ from terramoo.moolit import Err, Map, Obj, Ref, Sym
         ("{}", []),
         ('{1, "two", #3, {4}}', [1, "two", Obj(3), [4]]),
         ('["k" -> 1, 2 -> "v"]', Map({"k": 1, 2: "v"})),
-        ("true", True),
         ("$room", Ref("$", "room")),
         ("@grand_courtyard", Ref("@", "grand_courtyard")),
     ],
@@ -77,13 +76,15 @@ def test_objdef_round_trip():
     assert obj.location == Ref("@", "gatehouse")
     assert obj.flags == "r"
     assert [p.name for p in obj.props] == ["guard_class", "odd name", "description", "arrival_msg"]
-    assert obj.prop("odd name").owner == Obj(2)
-    assert obj.prop("description").value[1] == 'Wide steps rise north; the fountain says "drink".'
-    assert obj.prop("arrival_msg").defined is False
-    assert obj.verb("bow").args == ("any", "none", "none")
-    assert obj.verb("bow").code[1] == "if (player.location == this)"
-    assert obj.verb("look_self").names == "look_self look*ing"
-    assert obj.verb("look_self").owner == Obj(2)
+    _, odd, description, arrival = obj.props
+    assert odd.owner == Obj(2)
+    assert description.value[1] == 'Wide steps rise north; the fountain says "drink".'
+    assert arrival.defined is False
+    bow, look = obj.verbs
+    assert bow.args == ("any", "none", "none")
+    assert bow.code[1] == "if (player.location == this)"
+    assert look.names == "look_self look*ing"
+    assert look.owner == Obj(2)
     assert objdef.render(obj) == SAMPLE
 
 
@@ -114,8 +115,6 @@ def test_prop_value_with_semicolon_in_string():
 
 
 def test_ordered_like_keeps_the_file_order_and_appends_new_ones():
-    from terramoo.model import ordered_like
-
     live = ObjectDef(key="x", name="x", parent=Obj(1),
                      props=[PropDef("c", 1), PropDef("new", 2), PropDef("a", 3)],
                      verbs=[VerbDef("z", []), VerbDef("y", [])])

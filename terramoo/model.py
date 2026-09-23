@@ -13,10 +13,6 @@ from dataclasses import dataclass, field
 
 from .moolit import Obj, Ref
 
-OWNER_SELF = Ref("@", "me")  # the player; spelled `@me` in files
-
-ArgSpec = tuple[str, str, str]  # dobj, prep, iobj as MOO spells them
-
 
 @dataclass
 class PropDef:
@@ -31,7 +27,7 @@ class PropDef:
 class VerbDef:
     names: str  # the full spec, e.g. "look_self look*ing"
     code: list[str]
-    args: ArgSpec = ("this", "none", "this")
+    args: tuple[str, str, str] = ("this", "none", "this")  # dobj, prep, iobj
     perms: str = "rxd"
     owner: Obj | Ref | None = None
 
@@ -50,19 +46,6 @@ class ObjectDef:
     flags: str = ""  # subset of "rwf", in that order
     props: list[PropDef] = field(default_factory=list)
     verbs: list[VerbDef] = field(default_factory=list)
-    obj: Obj | None = None  # the live number, when known
-
-    def prop(self, name: str) -> PropDef | None:
-        for p in self.props:
-            if p.name == name:
-                return p
-        return None
-
-    def verb(self, key: str) -> VerbDef | None:
-        for v in self.verbs:
-            if v.key == key:
-                return v
-        return None
 
 
 def ordered_like(obj: ObjectDef, template: ObjectDef) -> ObjectDef:
@@ -80,9 +63,7 @@ def ordered_like(obj: ObjectDef, template: ObjectDef) -> ObjectDef:
     return obj
 
 
-def normalize_flags(flags: str) -> str:
-    return "".join(c for c in "rwf" if c in flags)
-
-
-def normalize_perms(perms: str, alphabet: str) -> str:
-    return "".join(c for c in alphabet if c in perms)
+def normalize(chars: str, alphabet: str) -> str:
+    """`chars` in `alphabet` order, anything else dropped: "rwf" for object
+    flags, "rwc" for property perms, "rwxd" for verb perms."""
+    return "".join(c for c in alphabet if c in chars)

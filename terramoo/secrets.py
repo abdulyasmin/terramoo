@@ -20,11 +20,11 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / 
 ENV_VAR = "TMOO_SECRET"
 
 
-def _keychain_read(service: str, world: str) -> str | None:
+def _keychain_read(world: str) -> str | None:
     if sys.platform != "darwin":
         return None
     r = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-a", world, "-w"],
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", world, "-w"],
         capture_output=True,
         text=True,
     )
@@ -34,7 +34,7 @@ def _keychain_read(service: str, world: str) -> str | None:
 def secret_for(world: str) -> str:
     if os.environ.get(ENV_VAR):
         return os.environ[ENV_VAR]
-    found = _keychain_read(KEYCHAIN_SERVICE, world)
+    found = _keychain_read(world)
     if found:
         return found
     f = CONFIG_DIR / f"{world}.secret"

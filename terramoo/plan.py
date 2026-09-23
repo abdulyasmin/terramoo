@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import ObjectDef, PropDef, VerbDef, normalize_flags, normalize_perms
+from .model import ObjectDef, normalize
 from .moolit import Obj, Ref, walk
 from .refs import Refs, UnresolvedRef
 
@@ -30,12 +30,9 @@ class Plan:
         return not (self.creates or self.ops or self.destroys)
 
 
-def _me(refs: Refs, owner, *, live: bool = False):
+def _owner(refs: Refs, owner, *, live: bool = False):
+    """An owner as a number; None means the player."""
     return refs.player if owner is None else refs.resolve_ref(owner, live=live)
-
-
-def _key_ref(key: str) -> Ref:
-    return Ref("@", key)
 
 
 def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: Refs) -> Plan:
@@ -82,7 +79,7 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         if key in broken:
             continue
         obj = files[key]
-        current = live.get(key) if key in refs.registry else None
+        current = live.get(key)
         try:
             ops = diff_object(key, obj, current, refs)
         except UnresolvedRef as e:
@@ -97,7 +94,7 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         if key not in files:
             plan.destroys.append(key)
     if plan.ops or plan.creates:
-        plan.ops.append(("link", [_key_ref(k) for k in files]))
+        plan.ops.append(("link", [Ref("@", k) for k in files]))
     return plan
 
 
@@ -126,7 +123,7 @@ def _topo(keys: list[str], files: dict[str, ObjectDef]) -> tuple[list[str], set[
             cyclic.update(stack[stack.index(k):])
             return
         parent = files[k].parent
-        if isinstance(parent, Ref) and parent.kind == "@" and parent.name in files and parent.name in keys:
+        if isinstance(parent, Ref) and parent.kind == "@" and parent.name in keys:
             visit(parent.name, stack + [k])
         seen.add(k)
         out.append(k)
@@ -142,63 +139,63 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
     both sides to numbers first.
     `have` is None for an object that does not exist yet: every attribute
     is then set, on the object the create op registers under `key`."""
-    me = _key_ref(key)
+    target = Ref("@", key)
     ops: list[tuple] = []
-    r = refs.resolve_ref
+    file_ref = refs.resolve_ref
 
-    def h(v):  # a live value: a key being recreated is still its old number
+    def live_ref(v):  # a key being recreated is still its old number on the MOO
         return refs.resolve_ref(v, live=True)
 
     if have is not None and want.name != have.name:
-        ops.append(("name", me, want.name))
-    if have is not None and r(want.parent) != h(have.parent):
-        ops.append(("chparent", me, r(want.parent)))
-    if r(want.location) != (h(have.location) if have else Obj(-1)):
-        ops.append(("move", me, r(want.location)))
-    want_flags = normalize_flags(want.flags)
-    if want_flags != (normalize_flags(have.flags) if have else ""):
-        ops.append(("flags", me, want_flags))
+        ops.append(("name", target, want.name))
+    if have is not None and file_ref(want.parent) != live_ref(have.parent):
+        ops.append(("chparent", target, file_ref(want.parent)))
+    if file_ref(want.location) != (live_ref(have.location) if have else Obj(-1)):
+        ops.append(("move", target, file_ref(want.location)))
+    want_flags = normalize(want.flags, "rwf")
+    if want_flags != (normalize(have.flags, "rwf") if have else ""):
+        ops.append(("flags", target, want_flags))
 
     have_props = {p.name: p for p in (have.props if have else [])}
     for p in want.props:
         cur = have_props.pop(p.name, None)
         value = refs.resolve(p.value)
         if p.defined:
-            owner = _me(refs, p.owner)
-            perms = normalize_perms(p.perms, "rwc")
+            owner = _owner(refs, p.owner)
+            perms = normalize(p.perms, "rwc")
             if cur is None:
-                ops.append(("addprop", me, p.name, value, [owner, perms]))
+                ops.append(("addprop", target, p.name, value, [owner, perms]))
             elif not cur.defined:
                 raise UnresolvedRef(f"property {p.name} is inherited on the MOO but `property` (defined) in the file")
             else:
-                if (owner, perms) != (_me(refs, cur.owner, live=True), normalize_perms(cur.perms, "rwc")):
-                    ops.append(("propinfo", me, p.name, [owner, perms]))
+                if (owner, perms) != (_owner(refs, cur.owner, live=True), normalize(cur.perms, "rwc")):
+                    ops.append(("propinfo", target, p.name, [owner, perms]))
                 if value != refs.resolve(cur.value, live=True):
-                    ops.append(("setprop", me, p.name, value))
+                    ops.append(("setprop", target, p.name, value))
         else:
             if cur is not None and cur.defined:
                 raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
             if cur is None or value != refs.resolve(cur.value, live=True):
-                ops.append(("setprop", me, p.name, value))
+                ops.append(("setprop", target, p.name, value))
     for name, cur in have_props.items():
-        ops.append(("rmprop", me, name) if cur.defined else ("clearprop", me, name))
+        ops.append(("rmprop", target, name) if cur.defined else ("clearprop", target, name))
 
     have_verbs = {v.key: v for v in (have.verbs if have else [])}
     for v in want.verbs:
         cur = have_verbs.pop(v.key, None)
-        owner = _me(refs, v.owner)
-        perms = normalize_perms(v.perms, "rwxd")
+        owner = _owner(refs, v.owner)
+        perms = normalize(v.perms, "rwxd")
         if cur is None:
-            ops.append(("addverb", me, [owner, perms, v.names], list(v.args), list(v.code)))
+            ops.append(("addverb", target, [owner, perms, v.names], list(v.args), list(v.code)))
             continue
-        if (owner, perms, v.names) != (_me(refs, cur.owner, live=True), normalize_perms(cur.perms, "rwxd"), cur.names):
-            ops.append(("verbinfo", me, v.key, [owner, perms, v.names]))
+        if (owner, perms, v.names) != (_owner(refs, cur.owner, live=True), normalize(cur.perms, "rwxd"), cur.names):
+            ops.append(("verbinfo", target, v.key, [owner, perms, v.names]))
         if tuple(v.args) != tuple(cur.args):
-            ops.append(("verbargs", me, v.key, list(v.args)))
+            ops.append(("verbargs", target, v.key, list(v.args)))
         if list(v.code) != list(cur.code):
-            ops.append(("verbcode", me, v.key, list(v.code)))
+            ops.append(("verbcode", target, v.key, list(v.code)))
     for name in have_verbs:
-        ops.append(("rmverb", me, name))
+        ops.append(("rmverb", target, name))
     return ops
 
 

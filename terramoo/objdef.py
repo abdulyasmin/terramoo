@@ -52,10 +52,6 @@ _VERB_RE = re.compile(r'^\s*verb\s+(?:"([^"]+)"|(\S+))\s*\((\S+)\s+(\S+)\s+(\S+)
 _OPT_RE = re.compile(r'(\w+):\s*("(?:[^"\\]|\\.)*"|\S+)')
 
 
-def _split_options(text: str) -> dict[str, str]:
-    return {k: v for k, v in _OPT_RE.findall(text)}
-
-
 def _parse_ref(text: str):
     text = text.strip()
     if text in ("none", "nothing"):
@@ -71,10 +67,6 @@ def _quoted(text: str) -> str:
     if not isinstance(v, str):
         raise FormatError(f"expected a string, got {text!r}")
     return v
-
-
-def _name(quoted: str | None, bare: str | None) -> str:
-    return quoted if quoted is not None else bare
 
 
 def parse(text: str) -> ObjectDef:
@@ -104,8 +96,8 @@ def parse(text: str) -> ObjectDef:
             vm = _VERB_RE.match(raw)
             if not vm:
                 raise FormatError(f"line {i + 1}: bad verb header")
-            names = _name(vm.group(1), vm.group(2))
-            opts = _split_options(vm.group(6))
+            names = vm.group(1) or vm.group(2)
+            opts = dict(_OPT_RE.findall(vm.group(6)))
             code = []
             i += 1
             while i < n and lines[i].strip() != "endverb":
@@ -129,21 +121,20 @@ def parse(text: str) -> ObjectDef:
             stmt, i = _read_statement(lines, i)
             pm = _PROP_RE.match(stmt)
             if pm:
-                opts = _split_options(pm.group(3))
+                opts = dict(_OPT_RE.findall(pm.group(3)))
                 obj.props.append(
                     PropDef(
-                        name=_name(pm.group(1), pm.group(2)),
+                        name=pm.group(1) or pm.group(2),
                         value=moolit.parse(pm.group(4)),
                         perms=_quoted(opts["flags"]) if "flags" in opts else "rc",
                         owner=_parse_ref(opts["owner"]) if "owner" in opts else None,
-                        defined=True,
                     )
                 )
                 continue
             om = _OVERRIDE_RE.match(stmt)
             if om:
                 obj.props.append(
-                    PropDef(name=_name(om.group(1), om.group(2)), value=moolit.parse(om.group(3)), defined=False)
+                    PropDef(name=om.group(1) or om.group(2), value=moolit.parse(om.group(3)), defined=False)
                 )
                 continue
             raise FormatError(f"line {i}: bad property line")
@@ -227,7 +218,7 @@ def _ident_or_quoted(name: str) -> str:
     return name if re.fullmatch(_IDENT, name) else moolit.escape(name)
 
 
-def _value_lines(value) -> str:
+def _render_value(value) -> str:
     """Lists of strings (descriptions, help text) go one element per line so
     diffs stay line-sized; everything else stays on one line."""
     if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
@@ -251,9 +242,9 @@ def render(obj: ObjectDef) -> str:
             opts = f"flags: {moolit.escape(p.perms)}"
             if p.owner is not None:
                 opts += f", owner: {p.owner}"
-            out.append(f"  property {_ident_or_quoted(p.name)} ({opts}) = {_value_lines(p.value)};")
+            out.append(f"  property {_ident_or_quoted(p.name)} ({opts}) = {_render_value(p.value)};")
         else:
-            out.append(f"  override {_ident_or_quoted(p.name)} = {_value_lines(p.value)};")
+            out.append(f"  override {_ident_or_quoted(p.name)} = {_render_value(p.value)};")
     for v in obj.verbs:
         out.append("")
         head = f"  verb {_ident_or_quoted(v.names)} ({v.args[0]} {v.args[1]} {v.args[2]}) flags: {moolit.escape(v.perms)}"

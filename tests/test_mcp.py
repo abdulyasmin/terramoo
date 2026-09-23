@@ -13,8 +13,6 @@ def transport(answer):
 
     def call_tool(name, arguments):
         t.sent.append((name, arguments))
-        if isinstance(answer, Exception):
-            raise answer
         return answer
 
     t.call_tool = call_tool

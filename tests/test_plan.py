@@ -23,7 +23,7 @@ def kinds(ops):
 def test_identical_objects_need_nothing():
     r = refs(hall=200)
     want = room(props=[PropDef("description", "x", defined=False)], verbs=[VerbDef("look", ["return 1;"])])
-    have = room(props=[PropDef("description", "x", defined=False)], verbs=[VerbDef("look", ["return 1;"])], obj=Obj(200))
+    have = room(props=[PropDef("description", "x", defined=False)], verbs=[VerbDef("look", ["return 1;"])])
     assert plan.diff_object("hall", want, have, r) == []
 
 
@@ -31,7 +31,7 @@ def test_live_side_may_be_symbolized():
     """Export writes `$room` and `@name` where it can; both sides resolve."""
     r = refs(hall=200, gate=201)
     want = room(location=Ref("@", "gate"), props=[PropDef("dest", Ref("@", "gate"), defined=False)])
-    have = room(parent=Obj(3), location=Obj(201), props=[PropDef("dest", Obj(201), defined=False)], obj=Obj(200))
+    have = room(parent=Obj(3), location=Obj(201), props=[PropDef("dest", Obj(201), defined=False)])
     assert plan.diff_object("hall", want, have, r) == []
 
 
@@ -60,7 +60,6 @@ def test_every_kind_of_change():
             PropDef("arrival_msg", "x", defined=False),  # override the file dropped -> clear
         ],
         verbs=[VerbDef("look", ["return 1;"]), VerbDef("dance", [])],
-        obj=Obj(200),
     )
     ops = plan.diff_object("hall", want, have, r)
     assert kinds(ops) == [
@@ -104,7 +103,7 @@ def test_registry_object_that_vanished_is_recreated_and_named():
 def test_orphans_and_problems():
     r = refs(hall=200, attic=201)
     files = {"hall": room(parent=Ref("$", "castle"))}
-    p = plan.build(files, {"hall": room(obj=Obj(200))}, r)
+    p = plan.build(files, {"hall": room()}, r)
     assert p.destroys == ["attic"]
     assert p.problems and "castle" in p.problems[0]
     assert p.creates == []
@@ -113,7 +112,7 @@ def test_orphans_and_problems():
 def test_defined_versus_override_mismatch_is_a_problem():
     r = refs(hall=200)
     want = room(props=[PropDef("description", "x", defined=True)])
-    have = room(props=[PropDef("description", "x", defined=False)], obj=Obj(200))
+    have = room(props=[PropDef("description", "x", defined=False)])
     p = plan.build({"hall": want}, {"hall": have}, r)
     assert p.problems and "inherited" in p.problems[0]
 
@@ -121,14 +120,14 @@ def test_defined_versus_override_mismatch_is_a_problem():
 def test_map_values_compare_after_resolution():
     r = refs(hall=200, gate=201)
     want = room(props=[PropDef("links", Map({"north": Ref("@", "gate")}), defined=False)])
-    have = room(props=[PropDef("links", Map({"north": Obj(201)}), defined=False)], obj=Obj(200))
+    have = room(props=[PropDef("links", Map({"north": Obj(201)}), defined=False)])
     assert plan.diff_object("hall", want, have, r) == []
 
 
 def test_reference_to_a_key_with_no_file_is_a_problem():
     r = refs(hall=200, door=201)
     files = {"hall": room(props=[PropDef("exit_to", Ref("@", "door"))])}
-    p = plan.build(files, {"hall": room(obj=Obj(200))}, r)
+    p = plan.build(files, {"hall": room()}, r)
     assert p.problems == ["hall: refers to @door, which has no file"]
     assert not p.creates and not p.ops
     assert p.destroys == ["door"]
@@ -140,7 +139,7 @@ def test_reference_to_a_recreated_object_waits_for_its_new_number():
     r = refs(hall=200, door=201)
     files = {"hall": room(props=[PropDef("to", Ref("@", "door"))]),
              "door": ObjectDef(key="door", name="door", parent=Ref("$", "exit"))}
-    live = {"hall": room(props=[PropDef("to", Obj(201))], obj=Obj(200)), "door": None}
+    live = {"hall": room(props=[PropDef("to", Obj(201))]), "door": None}
     p = plan.build(files, live, r)
     assert [c[0] for c in p.creates] == ["door"]
     assert ("setprop", Ref("@", "hall"), "to", Ref("@", "door")) in p.ops

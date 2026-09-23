@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from . import moolit
-from .model import ObjectDef, PropDef, VerbDef, normalize_flags
+from .model import ObjectDef, PropDef, VerbDef, normalize
 from .moolit import Obj
 from .refs import Refs
 from .world import World
@@ -30,15 +30,14 @@ def _owner(o: Obj, refs: Refs):
 
 
 def _to_def(key: str, rec: list, refs: Refs, ignore: set[str]) -> ObjectDef:
-    obj_num, name, parent, location, owner, flags, props, verbs = rec
+    _, name, parent, location, owner, flags, props, verbs = rec
     obj = ObjectDef(
         key=key,
         name=name,
         parent=refs.symbolize_obj(parent),
         location=refs.symbolize_obj(location),
         owner=_owner(owner, refs),
-        flags=normalize_flags(flags),
-        obj=obj_num,
+        flags=normalize(flags, "rwf"),
     )
     for pname, defined, powner, perms, literal in props:
         if pname in ignore:
@@ -61,7 +60,7 @@ def slug(name: str, taken: set[str]) -> str:
     base = "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_")
     while "__" in base:
         base = base.replace("__", "_")
-    if not base or not (base[0].isalpha() or base[0] == "_"):
+    if not base or not base[0].isalpha():
         base = "obj_" + base
     key, n = base, 2
     while key in taken:

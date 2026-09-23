@@ -64,10 +64,8 @@ def cmd_init(args):
 
 
 def cmd_secret(args):
-    if args.action == "store":
-        secret = getpass.getpass(f"password (or MCP token) for world {args.world_name}: ")
-        where = store_secret(args.world_name, check_secret(secret))
-        print(f"stored in {where}")
+    secret = getpass.getpass(f"password (or MCP token) for world {args.world_name}: ")
+    print(f"stored in {store_secret(args.world_name, check_secret(secret))}")
 
 
 def cmd_bootstrap(args):
@@ -104,9 +102,10 @@ def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
     return [o for o in owned if o not in known]
 
 
-def _export_all(w: World, refs, keys):
+def _write_exports(w: World, refs, keys) -> int:
+    """Write the files for `keys` from the live objects; how many were written."""
     live = export_mod.export(w, refs, keys)
-    written = []
+    written = 0
     for key in keys:
         obj = live.get(key)
         if obj is None:
@@ -116,10 +115,10 @@ def _export_all(w: World, refs, keys):
         if path.exists():
             try:
                 ordered_like(obj, objdef.parse(path.read_text()))
-            except (objdef.FormatError, ValueError):
+            except ValueError:
                 pass  # an unreadable file is simply replaced
         w.write_file(obj)
-        written.append(key)
+        written += 1
     return written
 
 
@@ -130,9 +129,9 @@ def cmd_pull(args):
     missing = [k for k in keys if k not in refs.registry]
     if missing:
         raise MooError(f"not in the registry: {', '.join(missing)}")
-    written = _export_all(w, refs, keys)
+    written = _write_exports(w, refs, keys)
     w.save_state(refs.registry)
-    print(f"wrote {len(written)} file(s) under {w.objects_dir.relative_to(w.root)}")
+    print(f"wrote {written} file(s) under {w.objects_dir.relative_to(w.root)}")
 
 
 def cmd_adopt(args):
@@ -140,7 +139,7 @@ def cmd_adopt(args):
     refs = w.refs()
     new: list[tuple[str, Obj]] = []
     if args.owned:
-        owned = w.owned()
+        owned = w.server_info()[0]
         if owned is None:
             raise MooError("this core keeps no owned_objects list; adopt objects one at a time: tmoo adopt <#n> <key>")
         stray = _stray(w, refs, owned)
@@ -163,7 +162,7 @@ def cmd_adopt(args):
         print(f"  {k} = {o}" if res[0] == 1 else f"  {k}: {res[1]} {res[2]}")
     refs.registry = w.read_registry()
     refs.reindex()
-    _export_all(w, refs, [k for k, _ in new])
+    _write_exports(w, refs, [k for k, _ in new])
     w.save_state(refs.registry)
 
 
@@ -183,7 +182,7 @@ def _plan(w: World):
     refs = w.refs()
     files = w.load_files()
     live = export_mod.export(w, refs, [k for k in files if k in refs.registry])
-    return refs, files, live, plan_mod.build(files, live, refs)
+    return refs, files, plan_mod.build(files, live, refs)
 
 
 def _print_plan(p: plan_mod.Plan, destroy: bool):
@@ -202,7 +201,7 @@ def _print_plan(p: plan_mod.Plan, destroy: bool):
 
 def cmd_plan(args):
     w = _world(args)
-    _, _, _, p = _plan(w)
+    _, _, p = _plan(w)
     if p.empty and not p.problems:
         print("no changes")
         return
@@ -213,7 +212,7 @@ def cmd_plan(args):
 
 def cmd_apply(args):
     w = _world(args)
-    refs, files, _, p = _plan(w)
+    refs, files, p = _plan(w)
     if p.problems:
         _print_plan(p, args.destroy)
         raise MooError("fix the problems above first")

@@ -54,12 +54,6 @@ class Transport:
             raise MooError(f"{obj}:{name} did not compile: " + " / ".join(map(str, errors)))
         return "updated" if exists else "installed"
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
 
 def connect(conn: dict, player: str, secret: str) -> Transport:
     """Open the transport a world's `[connection]` table describes."""
