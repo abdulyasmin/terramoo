@@ -5,3 +5,5 @@ __pycache__/
 *.egg-info/
 dist/
 /worlds/*/.cache/
+/testbeds/*/.build/
+/testbeds/*/.run/

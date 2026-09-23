@@ -1,7 +1,7 @@
 [project]
 name = "terramoo"
 version = "0.1.0"
-description = "Declarative management of a MOO player's objects: objdef files, plan and apply over a hosted MCP gate."
+description = "Declarative management of a MOO player's objects: objdef files, plan and apply against any MOO."
 requires-python = ">=3.12"
 dependencies = []
 
