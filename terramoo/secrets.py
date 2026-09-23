@@ -43,6 +43,21 @@ def secret_for(world: str) -> str:
     raise MooError(f"no secret for world {world}: run `tmoo secret store {world}` or set TMOO_SECRET")
 
 
+def check_secret(secret: str) -> str:
+    """The secret as typed, stripped, or a MooError when it can't be one.
+
+    `tmoo secret store` reads a single line, so pasting a token's JSON
+    wrapper stores only its first line (`{"token": `). Refuse anything
+    that starts like JSON or a quoted string rather than store it.
+    """
+    secret = secret.strip()
+    if not secret:
+        raise MooError("empty secret: nothing stored")
+    if secret[0] in "{[\"'":
+        raise MooError(f"that starts with {secret[0]!r}, like pasted JSON or quotes: paste only the token itself")
+    return secret
+
+
 def store_secret(world: str, secret: str) -> str:
     if sys.platform == "darwin":
         subprocess.run(

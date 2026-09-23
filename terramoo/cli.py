@@ -15,7 +15,7 @@ from . import plan as plan_mod
 from .errors import MooError
 from .model import ordered_like
 from .moolit import Obj
-from .secrets import store_secret
+from .secrets import check_secret, store_secret
 from .world import World, find_root
 
 _open: list[World] = []
@@ -66,7 +66,7 @@ def cmd_init(args):
 def cmd_secret(args):
     if args.action == "store":
         secret = getpass.getpass(f"password (or MCP token) for world {args.world_name}: ")
-        where = store_secret(args.world_name, secret.strip())
+        where = store_secret(args.world_name, check_secret(secret))
         print(f"stored in {where}")
 
 
