@@ -201,7 +201,7 @@ def cmd_plan(args):
 
 def cmd_apply(args):
     w = _world(args)
-    refs, _, _, p = _plan(w)
+    refs, files, _, p = _plan(w)
     if p.problems:
         _print_plan(p, args.destroy)
         raise MooError("fix the problems above first")
@@ -215,7 +215,7 @@ def cmd_apply(args):
         if answer.strip().lower() not in ("y", "yes"):
             print("aborted")
             return
-    outcome = apply_mod.run(w, p, refs, destroy=args.destroy)
+    outcome = apply_mod.run(w, p, refs, files=files, destroy=args.destroy)
     if outcome.failed:
         print(f"{len(outcome.failed)} op(s) failed:")
         for label, why in outcome.failed:

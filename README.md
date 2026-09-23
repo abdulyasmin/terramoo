@@ -55,7 +55,7 @@ tls = false
 toolbox_parent = "$thing"
 
 ignore_props = []       # runtime state never written to files, beyond the defaults
-keep_props = []         # re-enable one of the defaults (e.g. "key", the lock)
+keep_props = []         # re-enable one of the defaults
 ```
 
 The secret (a password, or an MCP token) is read from `$TMOO_SECRET`, the
@@ -98,7 +98,7 @@ endobject
 - Verb code is indented four spaces, with the MOO's own two-space unparse
   indent inside that. Keep that style and a save shows up as a code diff,
   not a whole-verb rewrite.
-- Runtime state is never written (`exits`, `entrances`, `key`, `object_size`,
+- Runtime state is never written (`exits`, `entrances`, `object_size`,
   the mail and connection properties, and others): see `DEFAULT_IGNORE_PROPS`
   in `terramoo/world.py`. Exits are linked into their rooms by `apply`, using
   their `source` and `dest`.
@@ -137,7 +137,9 @@ world; `override` is the one keyword of ours.
 - **Apply.** Ops are sent as MOO literals, one eval per batch. A failed op
   is reported and the rest carry on. Nothing is recycled without
   `--destroy`. A registry object the MOO has lost is recreated from its file,
-  and the plan labels it as such.
+  and the plan labels it as such. New objects are read back after the create
+  phase and diffed again, so whatever the core's `initialize` set on them
+  (LambdaCore's `key = 0`) is corrected in the same run.
 
 ## Portability notes
 

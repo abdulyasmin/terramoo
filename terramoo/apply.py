@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from . import moolit
 from .moolit import Obj, Ref, walk
-from .plan import Plan, describe
+from .plan import Plan, describe, diff_object
 from .refs import Refs
 from .world import World
 
@@ -75,8 +75,27 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
     flush()
 
 
-def run(world: World, plan: Plan, refs: Refs, *, destroy: bool = False, log=print) -> Outcome:
+def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs) -> list[tuple]:
+    """Ops for the objects just created, diffed against what they actually
+    are now: a core's `initialize` sets properties of its own (LambdaCore's
+    `key = 0`, for one) that a plan made before the create cannot know."""
+    from .export import export
+
+    live = export(world, refs, created)
+    kept = [op for op in plan_ops
+            if op[0] == "link" or not (isinstance(op[1], Ref) and op[1].kind == "@" and op[1].name in created)]
+    fresh = [op for key in created if live.get(key) is not None
+             for op in diff_object(key, files[key], live[key], refs)]
+    links = [op for op in kept if op[0] == "link"]
+    return [op for op in kept if op[0] != "link"] + fresh + links
+
+
+def run(world: World, plan: Plan, refs: Refs, *, files: dict | None = None, destroy: bool = False,
+        log=print) -> Outcome:
+    """Apply `plan`.  Given the `files` it was made from, the objects it
+    creates are re-read once they exist and diffed again."""
     outcome = Outcome()
+    plan_ops = list(plan.ops)
     if plan.creates:
         log("creating:")
         ops = [_resolve_op(("create", *c), refs) for c in plan.creates]
@@ -85,10 +104,13 @@ def run(world: World, plan: Plan, refs: Refs, *, destroy: bool = False, log=prin
         refs.registry = world.read_registry()
         refs.pending = {k for k, _, _ in plan.creates if k not in refs.registry}
         refs.reindex()
-    if plan.ops:
+        created = [k for k, _, _ in plan.creates if k in refs.registry]
+        if files and created:
+            plan_ops = _replan_created(world, plan_ops, created, files, refs)
+    if plan_ops:
         log("applying:")
         ops, labels = [], []
-        for op in plan.ops:
+        for op in plan_ops:
             try:
                 ops.append(_resolve_op(op, refs))
                 labels.append(describe(op))

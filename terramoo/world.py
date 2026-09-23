@@ -93,9 +93,6 @@ DEFAULT_IGNORE_PROPS = {
     "notified",
     "last_move",
     "object_size",
-    # The lock: every LambdaCore-family `initialize` sets it to 0 on create,
-    # and `@lock` is how players change it.  `keep_props = ["key"]` manages it.
-    "key",
     TOOLBOX_PROP,
     LEGACY_TOOLBOX_PROP,
 }
