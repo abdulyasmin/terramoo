@@ -519,10 +519,10 @@ pull is byte-exact, so the rendering has to stay deterministic.
   terramoo/apply.py for the table", but the op vocabulary is really
   defined by `plan.diff_object` (producer) and the helper's own branches
   (consumer).
-- **A parent cycle crashes with a traceback.** `_topo` raises
-  `ValueError`, which `cli.main` doesn't catch (it catches only
-  `MooError`). The same goes for `tmoo adopt` given a mooR UUID object:
-  `int(args.object.lstrip("#"))` raises.
+- **Only `MooError` is caught at the CLI.** Any other exception that
+  escapes a command is a traceback, so user mistakes must become a
+  `MooError` or a plan problem (as a parent loop and a bad `adopt`
+  object argument do).
 - **`plan.build` changes its `refs`.** It sets `refs.pending`, and
   `apply.run` depends on that. Build a fresh `Refs` per plan.
 - **`addverb` sets code by index.** It calls `set_verb_code(o,

@@ -150,7 +150,7 @@ def cmd_adopt(args):
     else:
         if not args.object or not args.key:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
-        o = Obj(int(args.object.lstrip("#")))
+        o = parse_object_arg(args.object)
         if args.key in refs.registry:
             raise MooError(f"{args.key} is already {refs.registry[args.key]}")
         new.append((args.key, o))
@@ -165,6 +165,18 @@ def cmd_adopt(args):
     refs.reindex()
     _export_all(w, refs, [k for k, _ in new])
     w.save_state(refs.registry)
+
+
+def parse_object_arg(text: str) -> Obj:
+    """`#123`, `123` or a mooR UUID object (`#048D05-1234567890`)."""
+    text = text.strip()
+    try:
+        value = moolit.parse(text if text.startswith("#") else "#" + text)
+    except moolit.LiteralError:
+        value = None
+    if not isinstance(value, Obj):
+        raise MooError(f"not an object number: {text!r} (expected #123)")
+    return value
 
 
 def _plan(w: World):
