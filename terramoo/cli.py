@@ -143,7 +143,7 @@ def cmd_adopt(args):
         if owned is None:
             raise MooError("this core keeps no owned_objects list; adopt objects one at a time: tmoo adopt <#n> <key>")
         stray = _stray(w, refs, owned)
-        taken = set(refs.registry) | {p.stem for p in w.objects_dir.glob("*.moo")}
+        taken = {key.lower() for key in refs.registry} | {p.stem.lower() for p in w.objects_dir.glob("*.moo")}
         for o, n in zip(stray, w.names(stray)):
             new.append((export_mod.slug(n, taken), o))
     else:
@@ -162,12 +162,59 @@ def cmd_adopt(args):
         return
     ops = [["register", k, o] for k, o in new]
     results = w.eval(w.helper("tmoo_apply", w.transport.serialize(ops)))
-    for (k, o), res in zip(new, results):
-        print(f"  {k} = {o}" if res[0] == 1 else f"  {k}: {res[1]} {res[2]}")
+    successful = []
+    problems = []
+    if not isinstance(results, list):
+        problem = f"malformed helper result list: {results!r}"
+        print(f"  {problem}")
+        problems.append(problem)
+        results = []
+    elif len(results) != len(new):
+        problem = f"{len(new)} registrations sent, {len(results)} results"
+        print(f"  {problem}")
+        problems.append(problem)
+    for i, (k, o) in enumerate(new):
+        if i >= len(results):
+            continue
+        res = results[i]
+        if isinstance(res, list) and len(res) == 2 and type(res[0]) is int and res[0] == 1 and res[1] == o:
+            successful.append((k, o))
+        elif (
+            isinstance(res, list)
+            and len(res) == 3
+            and type(res[0]) is int
+            and res[0] == 0
+            and isinstance(res[1], str)
+            and isinstance(res[2], str)
+        ):
+            problem = f"{k}: {res[1]} {res[2]}"
+            print(f"  {problem}")
+            problems.append(problem)
+        else:
+            problem = f"{k}: malformed helper result: {res!r}"
+            print(f"  {problem}")
+            problems.append(problem)
     refs.registry = w.read_registry()
     refs.reindex()
-    _write_exports(w, refs, [k for k, _ in new])
+    export_keys = []
+    for requested, obj in successful:
+        actual = next(
+            (key for key, registered in refs.registry.items()
+             if key.lower() == requested.lower() and registered == obj),
+            None,
+        )
+        if actual is None:
+            problem = f"{requested}: successful registration is absent from the registry"
+            print(f"  {problem}")
+            problems.append(problem)
+            continue
+        print(f"  {actual} = {obj}")
+        export_keys.append(actual)
+    if export_keys:
+        _write_exports(w, refs, export_keys)
     w.save_state(refs.registry)
+    if problems:
+        raise MooError(f"adoption failed: {'; '.join(problems)}")
 
 
 def parse_object_arg(text: str) -> Obj:

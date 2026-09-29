@@ -31,6 +31,9 @@ for op in (ops)
       endif
       i = op[2] in reg[1];
       if (kind == "register")
+        if (i && reg[2][i] != r)
+          raise(E_INVARG, tostr("key ", reg[1][i], " is already registered as ", reg[2][i]));
+        endif
         j = r in reg[2];
         if (j && j != i)
           raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j]));

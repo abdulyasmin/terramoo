@@ -112,7 +112,8 @@ world; `override` is the one keyword of ours.
 - `tmoo bootstrap` creates a *toolbox*, an object the player owns reached as
   `player.tmoo`, and installs four helper verbs on it from
   `terramoo/helper/`. They are plain LambdaMOO 1.8, so one copy runs on
-  every server, and they refuse any caller but their owner.
+  every server, and they refuse any caller but their owner. Re-run
+  `tmoo bootstrap` after upgrading terramoo to install updated helpers.
 - The toolbox holds the *registry*, `key -> #nnn`. It lives in the MOO, so a
   rollback rolls it back too; `worlds/<world>/state.json` is a local copy.
 - `plan` diffs the files against the live objects. A `@ref` to a key with no

@@ -208,7 +208,11 @@ def test_export_render_parse_plan_is_empty_for_canonical_multiword_preposition(d
     assert result.unchanged == ["hall"]
 
 
-def test_export_skips_ignored_private_property_before_validating_unreadable_fields():
+@pytest.mark.parametrize(
+    "property_name, ignored_name",
+    [("Password", "password"), ("sessioncache", "SessionCache")],
+)
+def test_export_skips_ignored_private_property_case_insensitively(property_name, ignored_name):
     obj = Obj(10)
     record = [
         obj,
@@ -217,10 +221,10 @@ def test_export_skips_ignored_private_property_before_validating_unreadable_fiel
         Obj(-1),
         Obj(1),
         "",
-        [["password", 1, Obj(-1), "?", "E_PERM"]],
+        [[property_name, 1, Obj(-1), "?", "E_PERM"]],
         [],
     ]
-    world = ExportWorld({obj: record}, ignore_props={"password"})
+    world = ExportWorld({obj: record}, ignore_props={ignored_name})
     refs = Refs(player=Obj(1), registry={"hall": obj})
 
     exported = export_mod.export(world, refs, ["hall"])["hall"]

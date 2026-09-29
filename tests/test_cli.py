@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,32 @@ from terramoo.moolit import Obj, Ref
 from terramoo.plan import Plan
 from terramoo.refs import Refs
 from terramoo.world import World, registry_value
+
+
+class AdoptWorld:
+    def __init__(self, registry=None, reply=None):
+        registry = registry or {}
+        self.raw_registry = [list(registry), list(registry.values())]
+        self.reply = reply
+        self.sent = []
+        self.saved = []
+        self.transport = SimpleNamespace(serialize=moolit.serialize)
+
+    def refs(self):
+        return Refs(player=Obj(1), registry=registry_value(self.raw_registry))
+
+    def helper(self, verb, arg):
+        return verb, arg
+
+    def eval(self, call):
+        self.sent.append(call)
+        return self.reply(call) if callable(self.reply) else self.reply
+
+    def read_registry(self):
+        return registry_value(self.raw_registry)
+
+    def save_state(self, registry):
+        self.saved.append(dict(registry))
 
 
 @pytest.mark.parametrize("text, obj", [
@@ -110,6 +137,93 @@ def test_adopt_rejects_managed_object_before_sending_or_persisting(monkeypatch):
     assert world.sent == []
     assert world.raw_registry == [["hall"], [Obj(10)]]
     assert world.saved == []
+
+
+def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
+    world = AdoptWorld({"Hall": Obj(10)})
+    world.objects_dir = tmp_path
+    world.toolbox = Obj(99)
+    world.server_info = lambda: ([Obj(10), Obj(11)], "LambdaMOO")
+    world.names = lambda objects: ["Hall"]
+
+    def register(call):
+        _, arg = call
+        results = []
+        for _, key, obj in moolit.parse(arg):
+            existing = next((i for i, old in enumerate(world.raw_registry[0]) if old.lower() == key.lower()), None)
+            if existing is None:
+                world.raw_registry[0].append(key)
+                world.raw_registry[1].append(obj)
+            else:
+                world.raw_registry[1][existing] = obj
+            results.append([1, obj])
+        return results
+
+    world.reply = register
+    exported = []
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys: exported.extend(keys) or len(keys))
+
+    cli.cmd_adopt(SimpleNamespace(owned=True, object=None, key=None))
+
+    assert world.raw_registry == [["Hall", "hall_2"], [Obj(10), Obj(11)]]
+    assert exported == ["hall_2"]
+    assert world.saved == [{"Hall": Obj(10), "hall_2": Obj(11)}]
+
+
+def test_register_helper_refuses_to_rebind_an_occupied_key():
+    source = (Path(__file__).parents[1] / "terramoo/helper/tmoo_apply.moo").read_text()
+
+    assert 'if (i && reg[2][i] != r)' in source
+
+
+def test_adopt_failed_registration_exports_nothing_and_raises(monkeypatch):
+    world = AdoptWorld()
+
+    def reject(call):
+        world.raw_registry = [["Mine"], [Obj(11)]]
+        return [[0, "E_INVARG", "object #10 is already registered as other"]]
+
+    world.reply = reject
+    exported = []
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys: exported.extend(keys) or len(keys))
+
+    with pytest.raises(MooError, match="adoption failed"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
+
+    assert exported == []
+    assert world.saved == [{"Mine": Obj(11)}]
+
+
+def test_adopt_exports_the_registry_spelling_after_a_success(monkeypatch):
+    world = AdoptWorld()
+
+    def succeed(call):
+        world.raw_registry = [["Mine"], [Obj(10)]]
+        return [[1, Obj(10)]]
+
+    world.reply = succeed
+    exported = []
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys: exported.extend(keys) or len(keys))
+
+    cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
+
+    assert exported == ["Mine"]
+    assert world.saved == [{"Mine": Obj(10)}]
+
+
+@pytest.mark.parametrize("reply", [7, [], [[1]]])
+def test_adopt_rejects_malformed_helper_results(reply, monkeypatch):
+    world = AdoptWorld(reply=reply)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda *args: pytest.fail("malformed registration was exported"))
+
+    with pytest.raises(MooError, match="adoption failed"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
+
+    assert world.saved == [{}]
 
 
 def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monkeypatch):

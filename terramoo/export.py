@@ -68,6 +68,7 @@ def _owner(o: Obj, refs: Refs):
 
 def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = moolit.LAMBDA) -> ObjectDef:
     _, name, parent, location, owner, flags, props, verbs = rec
+    ignored = {n.lower() for n in ignore}
     if not (
         isinstance(name, str)
         and isinstance(parent, Obj)
@@ -97,7 +98,7 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
         ):
             raise MooError(f"tmoo_export returned a malformed property record for {key}")
         pname = prop[0]
-        if pname in ignore:
+        if pname.lower() in ignored:
             continue
         if not (
             type(prop[1]) is int
