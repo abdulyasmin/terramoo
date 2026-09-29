@@ -55,7 +55,7 @@ tls = false
 toolbox_parent = "$thing"
 
 ignore_props = []       # runtime state never written to files, beyond the defaults
-keep_props = []         # re-enable one of the defaults
+keep_props = []         # re-enable an exclusion (names are case-insensitive)
 ```
 
 The secret (a password, or an MCP token) is read from `$TMOO_SECRET`, the

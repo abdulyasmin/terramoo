@@ -34,6 +34,38 @@ keep_props = ["history"]
     assert w.ignore_props >= DEFAULT_IGNORE_PROPS - {"history"}
 
 
+@pytest.mark.parametrize("section", ["", "[core]\n"])
+def test_mixed_case_keep_props_survives_pull_and_plan(tmp_path, monkeypatch, section):
+    from terramoo import cli, export, plan
+    from terramoo.model import PropDef
+    from terramoo.refs import Refs
+
+    w = make_world(tmp_path, 'player = "alice"\n' + section + '''
+ignore_props = ["HISTORY", "Session_Cache", "Temporary"]
+keep_props = ["History", "TEMPORARY"]
+''')
+    player, hall = Obj(1), Obj(10)
+    refs = Refs(player=player, registry={"hall": hall})
+    record = [hall, "Hall", Obj(2), Obj(-1), player, "", [
+        ["History", 1, player, "rc", "42"],
+        ["Temporary", 1, player, "rc", "7"],
+        ["SESSION_CACHE", 1, player, "rc", "9"],
+    ], []]
+    monkeypatch.setattr(w, "helper", lambda *args: "export")
+    monkeypatch.setattr(w, "eval", lambda expression: [record])
+    w._transport = SimpleNamespace()
+    expected = ObjectDef(key="hall", name="Hall", parent=Obj(2),
+                         props=[PropDef("History", 42), PropDef("Temporary", 7)])
+    w.write_file(expected)
+
+    live = export.export(w, refs, ["hall"])
+    assert live == {"hall": expected}
+    assert plan.build(w.load_files(), live, refs).empty
+    assert cli._write_exports(w, refs, ["hall"]) == 1
+    assert w.load_files() == {"hall": expected}
+    assert w.ignore_props == (DEFAULT_IGNORE_PROPS | {"session_cache"}) - {"history"}
+
+
 def test_load_files_rejects_a_key_that_does_not_match_its_filename(tmp_path):
     w = make_world(tmp_path, 'player = "alice"\n')
     (w.objects_dir / "hall.moo").write_text(
