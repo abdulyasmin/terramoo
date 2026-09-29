@@ -7,10 +7,11 @@ if (caller_perms() != this.owner && !caller_perms().wizard)
 endif
 ops = args[1];
 may_suspend = length(args) > 1 && args[2];
-reg = this.registry;
 out = {};
 for op in (ops)
   try
+    "Earlier ops or suspended tasks may have changed the registry.";
+    reg = this.registry;
     kind = op[1];
     r = 1;
     if (kind == "create" || kind == "register")
@@ -26,6 +27,8 @@ for op in (ops)
         endif
         r = create(p);
         r.name = op[4];
+        "create() may run an :initialize verb that changes the registry.";
+        reg = this.registry;
       else
         r = op[3];
       endif
@@ -59,8 +62,16 @@ for op in (ops)
         if (valid(o))
           raise(E_INVARG, tostr("object ", o, " is still valid after recycle"));
         endif
-        reg = {listdelete(reg[1], i), listdelete(reg[2], i)};
-        this.registry = reg;
+        ":recycle may register objects, remove keys or replace this binding.";
+        reg = this.registry;
+        i = op[2] in reg[1];
+        if (i)
+          if (reg[2][i] != o)
+            raise(E_INVARG, tostr("key ", reg[1][i], " is now registered as ", reg[2][i]));
+          endif
+          reg = {listdelete(reg[1], i), listdelete(reg[2], i)};
+          this.registry = reg;
+        endif
       endif
     elseif (kind == "recycle")
       recycle(op[2]);

@@ -131,6 +131,38 @@ def test_destroy_helper_rejects_a_changed_registration(world):
         world.eval(f"valid({stale}) ? recycle({stale}) | 0")
 
 
+@pytest.mark.parametrize("first_op", ["destroy", "recycle"])
+def test_destroy_preserves_recycle_callback_registry_changes(world, first_op):
+    key, survivor_key = "tmoo_test_destroy", "tmoo_test_survivor"
+    reg = world.read_registry()
+    old = world.eval("create($thing)")
+    survivor = world.eval("create($thing)")
+    after = world.eval("create($thing)")
+    try:
+        serialize = world.transport.serialize
+        callback = [["register", survivor_key, survivor]]
+        code = [f"return {world.toolbox}:tmoo_apply({serialize(callback)});"]
+        setup = [
+            ["register", key, old],
+            ["addverb", old, [world.player, "xd", "recycle"], ["this", "none", "this"], code],
+        ]
+        result = world.eval(world.helper("tmoo_apply", serialize(setup)))
+        assert result == [[1, old], [1, 1]]
+        first = ["destroy", key.upper(), old] if first_op == "destroy" else ["recycle", old]
+        ops = [first, ["destroy", key, old], ["register", "tmoo_test_after", after]]
+        result = world.eval(world.helper("tmoo_apply", serialize(ops)))
+        assert result == [[1, 1], [1, 1], [1, after]]
+        assert world.read_registry() == {**reg, survivor_key: survivor, "tmoo_test_after": after}
+        assert not world.eval(f"valid({old})")
+        assert world.eval(f"valid({survivor})")
+    finally:
+        # Also clean up objects whose registration was lost by a broken helper.
+        world.eval(f"valid({old}) ? recycle({old}) | 0")
+        world.eval(f"valid({survivor}) ? recycle({survivor}) | 0")
+        world.eval(f"valid({after}) ? recycle({after}) | 0")
+        world.transport.set_prop(world.toolbox, "registry", [list(reg), list(reg.values())])
+
+
 def test_round_trip(world, capsys):
     (world.objects_dir / "tmoo_test_hall.moo").write_text(HALL)
     (world.objects_dir / "tmoo_test_door.moo").write_text(DOOR)
