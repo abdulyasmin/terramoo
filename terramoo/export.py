@@ -31,12 +31,15 @@ def _verb_args(args: list[str]) -> bool:
 def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | None]:
     """Export the registry objects named by `keys`.  Objects the registry
     names but the MOO no longer has come back as `None`."""
+    if hasattr(world, "require_helper_version"):
+        world.require_helper_version()
     by_obj = {refs.registry[k]: k for k in keys}
     objs = list(by_obj)
     out: dict[str, ObjectDef | None] = {}
     for i in range(0, len(objs), CHUNK):
         batch = objs[i:i + CHUNK]
-        records = world.eval(world.helper("tmoo_export", moolit.serialize(batch)))
+        bindings = [[by_obj[obj], obj, refs.generations.get(by_obj[obj]) or ""] for obj in batch]
+        records = world.eval(world.helper("tmoo_export", moolit.serialize(bindings)))
         if not isinstance(records, list):
             raise MooError("tmoo_export returned a malformed result")
         seen = set()

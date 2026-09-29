@@ -3,7 +3,7 @@ import json
 import pytest
 
 from terramoo.moolit import Map, Obj, Ref
-from terramoo.refs import Refs, UnresolvedRef, save_state
+from terramoo.refs import Refs, Registry, UnresolvedRef, save_state
 
 
 def test_pending_refs_keep_file_values_symbolic_but_resolve_live_values():
@@ -49,11 +49,17 @@ def test_reindex_switches_both_resolution_directions_to_the_refreshed_registry()
 def test_save_state_is_deterministic_and_uses_raw_object_identifiers(tmp_path):
     path = tmp_path / "state.json"
 
-    save_state(path, Obj(1), {"z": Obj(30), "a": Obj(20)}, Obj(9))
+    save_state(
+        path,
+        Obj(1),
+        Registry({"z": Obj(30), "a": Obj(20)}, {"z": "gen-z", "a": "gen-a"}),
+        Obj(9),
+    )
 
     assert json.loads(path.read_text()) == {
         "player": 1,
         "toolbox": 9,
         "registry": {"a": 20, "z": 30},
+        "generations": {"a": "gen-a", "z": "gen-z"},
     }
     assert path.read_text().index('"a"') < path.read_text().index('"z"')

@@ -7,6 +7,7 @@ import difflib
 import getpass
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 from . import apply as apply_mod
 from . import export as export_mod
@@ -83,7 +84,12 @@ def cmd_status(args):
     print(f"world {w.name}: {w.describe()} ({version or 'unknown server'}) as {w.player_name} ({refs.player}), toolbox {w.toolbox}")
     print(f"registry: {len(refs.registry)} objects, files: {len(files)}")
     for key, o in sorted(refs.registry.items()):
-        mark = "" if key in files else "  (no file)"
+        notes = []
+        if key not in files:
+            notes.append("no file")
+        if not refs.generations.get(key):
+            notes.append("unverified; use adopt --verify")
+        mark = f"  ({'; '.join(notes)})" if notes else ""
         print(f"  {key:32} {o}{mark}")
     for key in sorted(set(files) - set(refs.registry)):
         print(f"  {key:32} (not created yet)")
@@ -130,7 +136,7 @@ def cmd_pull(args):
     if missing:
         raise MooError(f"not in the registry: {', '.join(missing)}")
     written = _write_exports(w, refs, keys)
-    w.save_state(refs.registry)
+    w.save_state(refs.snapshot())
     print(f"wrote {written} file(s) under {w.objects_dir.relative_to(w.root)}")
 
 
@@ -138,6 +144,9 @@ def cmd_adopt(args):
     w = _world(args)
     refs = w.refs()
     new: list[tuple[str, Obj]] = []
+    verify = getattr(args, "verify", False)
+    if verify and args.owned:
+        raise MooError("--verify is only for one existing binding: tmoo adopt <#n> <key> --verify")
     if args.owned:
         owned = w.server_info()[0]
         if owned is None:
@@ -151,16 +160,25 @@ def cmd_adopt(args):
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
         o = parse_object_arg(args.object)
         existing_key = next((key for key in refs.registry if key.lower() == args.key.lower()), None)
-        if existing_key is not None:
+        if verify:
+            if existing_key is None or refs.registry[existing_key] != o:
+                actual = refs.registry.get(existing_key) if existing_key is not None else "not registered"
+                raise MooError(f"cannot verify {args.key} as {o}: current binding is {actual}")
+            new.append((existing_key, o))
+        elif existing_key is not None:
             raise MooError(f"{args.key} is already {refs.registry[existing_key]}")
         managed_as = next((key for key, obj in refs.registry.items() if obj == o), None)
-        if managed_as is not None:
+        if not verify and managed_as is not None:
             raise MooError(f"{o} is already managed as {managed_as}")
-        new.append((args.key, o))
+        if not verify:
+            new.append((args.key, o))
     if not new:
         print("nothing to adopt")
         return
-    ops = [["register", k, o] for k, o in new]
+    if hasattr(w, "require_helper_version"):
+        w.require_helper_version()
+    registrations = [(k, o, uuid4().hex) for k, o in new]
+    ops = [["register", k, o, nonce] for k, o, nonce in registrations]
     results = w.eval(w.helper("tmoo_apply", w.transport.serialize(ops)))
     successful = []
     problems = []
@@ -173,12 +191,12 @@ def cmd_adopt(args):
         problem = f"{len(new)} registrations sent, {len(results)} results"
         print(f"  {problem}")
         problems.append(problem)
-    for i, (k, o) in enumerate(new):
+    for i, (k, o, nonce) in enumerate(registrations):
         if i >= len(results):
             continue
         res = results[i]
         if isinstance(res, list) and len(res) == 2 and type(res[0]) is int and res[0] == 1 and res[1] == o:
-            successful.append((k, o))
+            successful.append((k, o, nonce))
         elif (
             isinstance(res, list)
             and len(res) == 3
@@ -194,13 +212,14 @@ def cmd_adopt(args):
             problem = f"{k}: malformed helper result: {res!r}"
             print(f"  {problem}")
             problems.append(problem)
-    refs.registry = w.read_registry()
-    refs.reindex()
+    refs.replace_registry(w.read_registry())
     export_keys = []
-    for requested, obj in successful:
+    for requested, obj, nonce in successful:
         actual = next(
             (key for key, registered in refs.registry.items()
-             if key.lower() == requested.lower() and registered == obj),
+             if key.lower() == requested.lower()
+             and registered == obj
+             and refs.generations.get(key) == nonce),
             None,
         )
         if actual is None:
@@ -212,7 +231,7 @@ def cmd_adopt(args):
         export_keys.append(actual)
     if export_keys:
         _write_exports(w, refs, export_keys)
-    w.save_state(refs.registry)
+    w.save_state(refs.snapshot())
     if problems:
         raise MooError(f"adoption failed: {'; '.join(problems)}")
 
@@ -269,7 +288,7 @@ def cmd_apply(args):
         raise MooError("fix the problems above first")
     if p.empty:
         print("no changes")
-        w.save_state(refs.registry)
+        w.save_state(refs.snapshot())
         return
     _print_plan(p, args.destroy)
     if not args.yes:
@@ -336,6 +355,7 @@ def main(argv=None):
     a.add_argument("object", nargs="?", help="#123")
     a.add_argument("key", nargs="?", help="registry name")
     a.add_argument("--owned", action="store_true", help="adopt every owned object not yet managed")
+    a.add_argument("--verify", action="store_true", help="stamp an existing key/object binding after confirming its identity")
     a.set_defaults(fn=cmd_adopt)
 
     pl = sub.add_parser("plan", help="show what apply would do")

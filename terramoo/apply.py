@@ -10,9 +10,11 @@ since each op is independent once its object exists.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 from . import moolit
-from .moolit import Ref
+from .errors import MooError
+from .moolit import Obj, Ref
 from .plan import Plan, describe, diff_object
 from .refs import Refs
 from .world import World
@@ -25,15 +27,29 @@ class Outcome:
 
 
 def _resolve_op(op: tuple, refs: Refs) -> list:
-    """The op with every `Ref` turned into a number.  A create's parent may
-    be a plain key string, made earlier in the same batch; it passes through."""
+    """Resolve an op and retain its registry identity for helper-side CAS."""
+    def binding(ref: Ref) -> list:
+        key = ref.name
+        obj = refs.resolve_ref(ref)
+        nonce = refs.generations.get(key)
+        if not nonce:
+            raise MooError(
+                f"@{key} has an unverified legacy binding; confirm it with "
+                f"`tmoo adopt {obj} {key} --verify`"
+            )
+        return [key, obj, nonce]
+
     if op[0] == "link":
-        return ["link", [refs.resolve_ref(r) for r in op[1] if r.name in refs.registry]]
-    return [op[0], *(refs.resolve(v) for v in op[1:])]
+        return ["link", [binding(r) for r in op[1] if r.name in refs.registry]]
+    if not isinstance(op[1], Ref) or op[1].kind != "@":
+        raise MooError(f"{op[0]} has no managed-object key")
+    key, obj, nonce = binding(op[1])
+    return [op[0], key, obj, nonce, *(refs.resolve(v) for v in op[2:])]
 
 
-def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> None:
+def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> list[object | None]:
     batch, batch_labels, size = [], [], 0
+    received: list[object | None] = []
     limit = world.transport.batch_bytes
     dialect = getattr(world.transport, "literal_dialect", moolit.LAMBDA)
 
@@ -46,10 +62,12 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
             for label in batch_labels:
                 outcome.failed.append((label, why))
                 log(f"  FAIL {label}: {why}")
+                received.append(None)
             batch.clear()
             batch_labels.clear()
             return
         for label, res in zip(batch_labels, results):
+            received.append(res)
             if isinstance(res, list) and len(res) >= 2 and res[0] == 1:
                 outcome.done.append(label)
                 log(f"  ok   {label}")
@@ -62,6 +80,7 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
                 log(f"  FAIL {label}: {why}")
         if len(results) != len(batch):
             outcome.failed.append(("batch", f"{len(batch)} ops sent, {len(results)} results"))
+            received.extend([None] * max(0, len(batch) - len(results)))
         batch.clear()
         batch_labels.clear()
 
@@ -74,6 +93,7 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
         batch_labels.append(label)
         size += len(text)
     flush()
+    return received
 
 
 def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs) -> list[tuple]:
@@ -95,16 +115,51 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
     """Apply `plan`, made from `files`.  The objects it creates are re-read
     once they exist and diffed again."""
     outcome = Outcome()
+    if hasattr(world, "require_helper_version"):
+        world.require_helper_version()
     plan_ops = list(plan.ops)
     if plan.creates:
         log("creating:")
-        ops = [_resolve_op(("create", *c), refs) for c in plan.creates]
+        create_nonces = {key: uuid4().hex for key, _, _ in plan.creates}
+        ops = [
+            [
+                "create",
+                key,
+                refs.registry.get(key, Obj(-1)),
+                refs.generations.get(key) or "",
+                refs.resolve(parent),
+                name,
+                create_nonces[key],
+            ]
+            for key, parent, name in plan.creates
+        ]
         labels = [f"create {k} ({n})" for k, _, n in plan.creates]
-        _send(world, ops, labels, outcome, log)
-        refs.registry = world.read_registry()
-        refs.pending = {k for k, _, _ in plan.creates if k not in refs.registry}
+        results = _send(world, ops, labels, outcome, log)
+        refs.replace_registry(world.read_registry())
+        created = []
+        for (key, _, _), label, result in zip(plan.creates, labels, results):
+            returned = result[1] if isinstance(result, list) and len(result) >= 2 and result[0] == 1 else None
+            if (
+                isinstance(returned, Obj)
+                and refs.registry.get(key) == returned
+                and refs.generations.get(key) == create_nonces[key]
+            ):
+                created.append(key)
+                continue
+            if returned is not None:
+                why = f"create returned {returned}, but the verified registry binding is different"
+                try:
+                    outcome.done.remove(label)
+                except ValueError:
+                    pass
+                outcome.failed.append((label, why))
+                log(f"  FAIL {label}: {why}")
+        failed_created = {key for key, _, _ in plan.creates} - set(created)
+        for key in failed_created:
+            refs.registry.pop(key, None)
+            refs.generations.pop(key, None)
+        refs.pending = failed_created
         refs.reindex()
-        created = [k for k, _, _ in plan.creates if k in refs.registry]
         if created:
             plan_ops = _replan_created(world, plan_ops, created, files, refs)
         # A key whose create failed now fails to resolve, so each op that
@@ -117,19 +172,31 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
             try:
                 ops.append(_resolve_op(op, refs))
                 labels.append(describe(op))
-            except KeyError as e:
+            except (KeyError, MooError) as e:
                 outcome.failed.append((describe(op), str(e)))
                 log(f"  SKIP {describe(op)}: {e}")
         _send(world, ops, labels, outcome, log)
-    if destroy and plan.destroys:
+    refs.pending = set()
+    if destroy and plan.destroys and outcome.failed:
+        log("skipping recycling: earlier create or apply operations failed; run a clean apply to retry")
+    elif destroy and plan.destroys:
         log("recycling:")
         ops, labels = [], []
         # Callbacks may have rebound orphan keys since the plan was built.
         for key, o in plan.destroys.items():
-            ops.append(["destroy", key, o])
-            labels.append(f"recycle {key} ({o})")
+            label = f"recycle {key} ({o})"
+            nonce = refs.generations.get(key)
+            if not nonce:
+                why = (
+                    f"@{key} has an unverified legacy binding; confirm it with "
+                    f"`tmoo adopt {o} {key} --verify`"
+                )
+                outcome.failed.append((label, why))
+                log(f"  SKIP {label}: {why}")
+                continue
+            ops.append(["destroy", key, o, nonce])
+            labels.append(label)
         _send(world, ops, labels, outcome, log)
-        refs.registry = world.read_registry()
-        refs.reindex()
-    world.save_state(refs.registry)
+    refs.replace_registry(world.read_registry())
+    world.save_state(refs.snapshot())
     return outcome

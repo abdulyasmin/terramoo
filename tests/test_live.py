@@ -11,6 +11,7 @@ import os
 import pytest
 
 from terramoo import cli
+from terramoo.moolit import Obj
 from terramoo.world import World
 
 LIVE = os.environ.get("TMOO_LIVE")
@@ -78,35 +79,39 @@ def run(capsys, *argv):
 
 @pytest.mark.parametrize("key", ["tmoo_test_occupied", "TMOO_TEST_OCCUPIED"])
 def test_register_helper_refuses_to_rebind_an_occupied_key(world, key):
-    create = [["create", "tmoo_test_occupied", world.eval("$thing"), "occupied key test"]]
+    create = [["create", "tmoo_test_occupied", Obj(-1), "", world.eval("$thing"), "occupied key test", "occupied-generation"]]
     result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
     assert result[0][0] == 1
     reg = world.read_registry()
     fresh = world.eval("create($thing)")
     try:
         assert fresh not in reg.values()
-        register = [["register", key, fresh]]
+        register = [["register", key, fresh, "fresh-generation"]]
         result = world.eval(world.helper("tmoo_apply", world.transport.serialize(register)))
         assert result[0][0:2] == [0, "E_INVARG"]
         assert world.read_registry() == reg
         assert world.eval(f"valid({fresh})")
     finally:
         # Restore the original binding even if a broken helper rebound it.
-        world.transport.set_prop(world.toolbox, "registry", [list(reg), list(reg.values())])
+        world.transport.set_prop(
+            world.toolbox,
+            "registry",
+            [list(reg), list(reg.values()), [reg.generations[k] for k in reg]],
+        )
         world.eval(f"valid({fresh}) ? recycle({fresh}) | 0")
 
 
 @pytest.mark.parametrize("already_gone", [False, True])
 def test_destroy_helper_is_idempotent(world, already_gone):
     key = "tmoo_test_destroy"
-    create = [["create", key, world.eval("$thing"), "destroy test"]]
+    create = [["create", key, Obj(-1), "", world.eval("$thing"), "destroy test", "destroy-generation"]]
     result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
     assert result[0][0] == 1
     reg = world.read_registry()
     obj = reg.pop(key)
     if already_gone:
         world.eval(f"recycle({obj})")
-    destroy = [["destroy", key, obj]]
+    destroy = [["destroy", key, obj, "destroy-generation"]]
     for _ in range(2):
         result = world.eval(world.helper("tmoo_apply", world.transport.serialize(destroy)))
         assert result == [[1, 1]]
@@ -116,13 +121,13 @@ def test_destroy_helper_is_idempotent(world, already_gone):
 
 def test_destroy_helper_rejects_a_changed_registration(world):
     key = "tmoo_test_changed"
-    create = [["create", key, world.eval("$thing"), "changed registration test"]]
+    create = [["create", key, Obj(-1), "", world.eval("$thing"), "changed registration test", "changed-generation"]]
     result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
     assert result[0][0] == 1
     reg = world.read_registry()
     stale = world.eval("create($thing)")
     try:
-        destroy = [["destroy", key, stale]]
+        destroy = [["destroy", key, stale, "changed-generation"]]
         result = world.eval(world.helper("tmoo_apply", world.transport.serialize(destroy)))
         assert result[0][0:2] == [0, "E_INVARG"]
         assert world.read_registry() == reg
@@ -131,8 +136,7 @@ def test_destroy_helper_rejects_a_changed_registration(world):
         world.eval(f"valid({stale}) ? recycle({stale}) | 0")
 
 
-@pytest.mark.parametrize("first_op", ["destroy", "recycle"])
-def test_destroy_preserves_recycle_callback_registry_changes(world, first_op):
+def test_destroy_preserves_recycle_callback_registry_changes(world):
     key, survivor_key = "tmoo_test_destroy", "tmoo_test_survivor"
     reg = world.read_registry()
     old = world.eval("create($thing)")
@@ -140,16 +144,19 @@ def test_destroy_preserves_recycle_callback_registry_changes(world, first_op):
     after = world.eval("create($thing)")
     try:
         serialize = world.transport.serialize
-        callback = [["register", survivor_key, survivor]]
+        callback = [["register", survivor_key, survivor, "survivor-generation"]]
         code = [f"return {world.toolbox}:tmoo_apply({serialize(callback)});"]
         setup = [
-            ["register", key, old],
-            ["addverb", old, [world.player, "xd", "recycle"], ["this", "none", "this"], code],
+            ["register", key, old, "old-generation"],
+            ["addverb", key, old, "old-generation", [world.player, "xd", "recycle"], ["this", "none", "this"], code],
         ]
         result = world.eval(world.helper("tmoo_apply", serialize(setup)))
         assert result == [[1, old], [1, 1]]
-        first = ["destroy", key.upper(), old] if first_op == "destroy" else ["recycle", old]
-        ops = [first, ["destroy", key, old], ["register", "tmoo_test_after", after]]
+        ops = [
+            ["destroy", key.upper(), old, "old-generation"],
+            ["destroy", key, old, "old-generation"],
+            ["register", "tmoo_test_after", after, "after-generation"],
+        ]
         result = world.eval(world.helper("tmoo_apply", serialize(ops)))
         assert result == [[1, 1], [1, 1], [1, after]]
         assert world.read_registry() == {**reg, survivor_key: survivor, "tmoo_test_after": after}
@@ -160,7 +167,11 @@ def test_destroy_preserves_recycle_callback_registry_changes(world, first_op):
         world.eval(f"valid({old}) ? recycle({old}) | 0")
         world.eval(f"valid({survivor}) ? recycle({survivor}) | 0")
         world.eval(f"valid({after}) ? recycle({after}) | 0")
-        world.transport.set_prop(world.toolbox, "registry", [list(reg), list(reg.values())])
+        world.transport.set_prop(
+            world.toolbox,
+            "registry",
+            [list(reg), list(reg.values()), [reg.generations[k] for k in reg]],
+        )
 
 
 def test_round_trip(world, capsys):
@@ -177,7 +188,7 @@ def test_round_trip(world, capsys):
 
     # The helper itself preserves registry uniqueness if a stale client tries
     # to register an object already managed under another key.
-    duplicate = [["register", "tmoo_test_duplicate", hall]]
+    duplicate = [["register", "tmoo_test_duplicate", hall, "duplicate-generation"]]
     result = world.eval(world.helper("tmoo_apply", world.transport.serialize(duplicate)))
     assert result[0][0] == 0
     assert world.read_registry() == reg

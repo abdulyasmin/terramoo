@@ -5,7 +5,14 @@ import pytest
 from terramoo.errors import MooError
 from terramoo.model import ObjectDef
 from terramoo.moolit import Obj
-from terramoo.world import DEFAULT_IGNORE_PROPS, HELPER_VERBS, TOOLBOX_NAME, World, registry_value
+from terramoo.world import (
+    DEFAULT_IGNORE_PROPS,
+    HELPER_VERSION_PROP,
+    HELPER_VERBS,
+    TOOLBOX_NAME,
+    World,
+    registry_value,
+)
 
 
 def make_world(tmp_path, config):
@@ -54,6 +61,7 @@ keep_props = ["History", "TEMPORARY"]
     monkeypatch.setattr(w, "helper", lambda *args: "export")
     monkeypatch.setattr(w, "eval", lambda expression: [record])
     w._transport = SimpleNamespace()
+    w._helper_version_checked = True
     expected = ObjectDef(key="hall", name="Hall", parent=Obj(2),
                          props=[PropDef("History", 42), PropDef("Temporary", 7)])
     w.write_file(expected)
@@ -64,6 +72,15 @@ keep_props = ["History", "TEMPORARY"]
     assert cli._write_exports(w, refs, ["hall"]) == 1
     assert w.load_files() == {"hall": expected}
     assert w.ignore_props == (DEFAULT_IGNORE_PROPS | {"session_cache"}) - {"history"}
+
+
+def test_generation_property_cannot_be_enabled_in_object_files(tmp_path):
+    w = make_world(
+        tmp_path,
+        'player = "alice"\nkeep_props = ["_terramoo_generation"]\n',
+    )
+
+    assert "_terramoo_generation" in w.ignore_props
 
 
 def test_load_files_rejects_a_key_that_does_not_match_its_filename(tmp_path):
@@ -127,11 +144,22 @@ def test_registry_value_rejects_malformed_registry_shapes(raw):
 
 
 def test_registry_value_accepts_parallel_key_and_object_lists():
+    legacy = registry_value([["hall", "door"], [Obj(10), Obj(11)]])
     assert registry_value([[], []]) == {}
-    assert registry_value([["hall", "door"], [Obj(10), Obj(11)]]) == {
+    assert legacy == {
         "hall": Obj(10),
         "door": Obj(11),
     }
+    assert legacy.generations == {"hall": None, "door": None}
+
+    verified = registry_value([["hall"], [Obj(10)], ["generation-hall"]])
+    assert verified == {"hall": Obj(10)}
+    assert verified.generations == {"hall": "generation-hall"}
+
+    partially_migrated = registry_value(
+        [["hall", "door"], [Obj(10), Obj(11)], ["generation-hall", ""]]
+    )
+    assert partially_migrated.generations == {"hall": "generation-hall", "door": None}
 
 
 def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):
@@ -198,7 +226,8 @@ def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     assert w.bootstrap(log=lambda _: None) == Obj(9)
     assert not any(expression.startswith("create(") for expression in transport.expressions)
     assert 'add_property(player, "tmoo", #9, {player, "r"})' in transport.expressions
-    assert 'add_property(#9, "registry", {{}, {}}, {player, "r"})' in transport.expressions
+    assert 'add_property(#9, "registry", {{}, {}, {}}, {player, "r"})' in transport.expressions
+    assert any(HELPER_VERSION_PROP in expression for expression in transport.expressions)
     assert [name for _, name, _ in transport.installed] == list(HELPER_VERBS)
     assert all(lines for _, _, lines in transport.installed)
 
@@ -214,3 +243,25 @@ def test_helper_tells_remote_helpers_whether_the_transport_can_suspend(tmp_path,
         _toolbox=Obj(9),
     )
     assert w.helper("tmoo_export", "{#1}").endswith(suffix)
+
+
+def test_outdated_helper_is_rejected_with_bootstrap_instruction(tmp_path):
+    class OldHelperTransport:
+        can_suspend = True
+
+        def eval(self, expression):
+            if expression == "properties(#9)":
+                return ["registry"]
+            pytest.fail(f"unexpected expression: {expression}")
+
+    w = World(
+        "test",
+        tmp_path,
+        "alice",
+        {},
+        _transport=OldHelperTransport(),
+        _toolbox=Obj(9),
+    )
+
+    with pytest.raises(MooError, match=r"outdated.*tmoo bootstrap"):
+        w.require_helper_version()

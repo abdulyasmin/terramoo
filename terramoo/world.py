@@ -18,7 +18,7 @@ from . import objdef
 from .errors import MooError
 from .model import ObjectDef
 from .moolit import Err, Obj
-from .refs import Refs, save_state
+from .refs import Refs, Registry, save_state
 from .secrets import secret_for
 from .transport import Transport, connect
 
@@ -27,6 +27,9 @@ HELPER_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs", "tmoo_info")
 SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
+GENERATION_PROP = "_terramoo_generation"
+HELPER_VERSION = 2
+HELPER_VERSION_PROP = "_terramoo_helper_version"
 
 # Properties that are the MOO's runtime state rather than the object's
 # definition, on LambdaCore and its descendants.  Exits and entrances are
@@ -68,6 +71,7 @@ DEFAULT_IGNORE_PROPS = {
     "notified",
     "last_move",
     "object_size",
+    GENERATION_PROP,
     TOOLBOX_PROP,
 }
 
@@ -84,16 +88,33 @@ def find_root() -> Path:
     raise MooError("no worlds/ directory here or above (run `tmoo init <world>` to start one, or set TMOO_ROOT)")
 
 
-def registry_value(raw) -> dict[str, Obj]:
-    """The registry as `tmoo_apply` keeps it: {keys, objects}."""
-    if isinstance(raw, list) and len(raw) == 2 and all(isinstance(x, list) for x in raw):
-        keys, objects = raw
+def registry_value(raw) -> Registry:
+    """The registry as `tmoo_apply` keeps it: {keys, objects, nonces}.
+
+    The old two-list shape remains readable so status can explain legacy
+    bindings, but its entries have no verified generation.
+    """
+    if isinstance(raw, list) and len(raw) in (2, 3) and all(isinstance(x, list) for x in raw):
+        keys, objects = raw[:2]
+        nonces = raw[2] if len(raw) == 3 else [None] * len(keys)
         valid_keys = all(isinstance(k, str) for k in keys)
         valid_objects = all(isinstance(o, Obj) for o in objects)
+        valid_nonces = all(n is None or isinstance(n, str) for n in nonces)
         unique_keys = valid_keys and len({k.lower() for k in keys}) == len(keys)
         unique_objects = valid_objects and len(set(objects)) == len(objects)
-        if len(keys) == len(objects) and valid_keys and valid_objects and unique_keys and unique_objects:
-            return dict(zip(keys, objects))
+        present_nonces = [n for n in nonces if n]
+        unique_nonces = len(set(present_nonces)) == len(present_nonces)
+        if (
+            len(keys) == len(objects) == len(nonces)
+            and valid_keys
+            and valid_objects
+            and valid_nonces
+            and unique_keys
+            and unique_objects
+            and unique_nonces
+        ):
+            normalized_nonces = [n or None for n in nonces]
+            return Registry(zip(keys, objects), dict(zip(keys, normalized_nonces)))
     raise MooError("toolbox has a malformed registry")
 
 
@@ -108,6 +129,7 @@ class World:
     _transport: Transport | None = None
     _player: Obj | None = None
     _toolbox: Obj | None = None
+    _helper_version_checked: bool = False
 
     @classmethod
     def load(cls, root: Path, name: str | None) -> "World":
@@ -133,6 +155,7 @@ class World:
         ignore -= {n.lower() for n in (
             *cfg.get("keep_props", []), *core.get("keep_props", []),
         )}
+        ignore.add(GENERATION_PROP)
         return cls(name=name, root=root, player_name=cfg["player"], connection=conn,
                    core=core, ignore_props=ignore)
 
@@ -207,6 +230,17 @@ class World:
             args.append("1" if self.transport.can_suspend else "0")
         return f"{self.toolbox}:{verb}({', '.join(args)})"
 
+    def require_helper_version(self) -> None:
+        if self._helper_version_checked:
+            return
+        props = self.eval(f"properties({self.toolbox})")
+        version = self.eval(f"{self.toolbox}.{HELPER_VERSION_PROP}") if HELPER_VERSION_PROP in props else None
+        if version != HELPER_VERSION:
+            raise MooError(
+                f"toolbox helpers are outdated (need version {HELPER_VERSION}); run `tmoo bootstrap`"
+            )
+        self._helper_version_checked = True
+
     @property
     def player(self) -> Obj:
         if self._player is None:
@@ -260,12 +294,20 @@ class World:
             else:
                 self.eval(f'add_property(player, "{TOOLBOX_PROP}", {tb}, {{player, "r"}})')
         self._toolbox = tb
-        if "registry" not in self.eval(f"properties({tb})"):
-            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}}}, {{player, "r"}})')
+        props = self.eval(f"properties({tb})")
+        if "registry" not in props:
+            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}}}, {{player, "r"}})')
         for name in HELPER_VERBS:
             code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
             r = self.transport.install_verb(tb, name, code)
             log(f"{tb}:{name} {r}")
+        if HELPER_VERSION_PROP in props:
+            self.transport.set_prop(tb, HELPER_VERSION_PROP, HELPER_VERSION)
+        else:
+            self.eval(
+                f'add_property({tb}, "{HELPER_VERSION_PROP}", {HELPER_VERSION}, {{player, "r"}})'
+            )
+        self._helper_version_checked = True
         if self.eval(f"{tb}.name") != TOOLBOX_NAME:
             self.transport.set_prop(tb, "name", TOOLBOX_NAME)
         return tb

@@ -8,16 +8,22 @@ from terramoo import apply, moolit, plan
 from terramoo.errors import MooError
 from terramoo.model import ObjectDef, PropDef
 from terramoo.moolit import Obj, Ref
-from terramoo.refs import Refs
-from terramoo.world import registry_value
+from terramoo.refs import Refs, Registry
 
 ME = Obj(130)
+
+
+def verify_bindings(world, registry):
+    world.registry = dict(registry)
+    world.generations = {key: f"generation-{key}" for key in registry}
+    return Refs(player=ME, registry=Registry(registry, world.generations))
 
 
 class FakeWorld:
     def __init__(self, fail=()):
         self.fail = set(fail)
         self.registry: dict[str, Obj] = {}
+        self.generations: dict[str, str] = {}
         self.names: dict[Obj, tuple[str, Obj]] = {}
         self.sent: list = []
         self.batches: list[list] = []
@@ -38,7 +44,7 @@ class FakeWorld:
 
         moolit.walk(value, no_refs)
         if verb == "tmoo_export":
-            return [[o, *self.names[o], Obj(-1), ME, "", [], []] for o in value]
+            return [[binding[1], *self.names[binding[1]], Obj(-1), ME, "", [], []] for binding in value]
         self.batches.append(value)
         return [self._op(op) for op in value]
 
@@ -46,19 +52,21 @@ class FakeWorld:
         self.sent.append(op)
         if op[0] == "destroy":
             self.registry.pop(op[1], None)
+            self.generations.pop(op[1], None)
             return [1, 1]
         if op[0] != "create":
             return [1, 1]
-        key, parent, name = op[1:]
+        key, _, _, parent, name, nonce = op[1:]
         if key in self.fail:
             return [0, "E_QUOTA", "no quota"]
         o = Obj(200 + len(self.registry))
         self.registry[key] = o
+        self.generations[key] = nonce
         self.names[o] = (name, self.registry.get(parent, parent))
         return [1, o]
 
     def read_registry(self):
-        return dict(self.registry)
+        return Registry(self.registry, self.generations)
 
     def save_state(self, registry):
         self.saved = dict(registry)
@@ -82,9 +90,12 @@ def test_creates_then_applies_with_new_numbers():
     outcome = run(w)
     assert not outcome.failed
     hall, guard = w.registry["hall"], w.registry["guard"]
-    assert ["addprop", hall, "guard", guard, [ME, "rc"]] in w.sent
-    assert ["move", guard, hall] in w.sent
-    assert w.sent[-1] == ["link", [hall, guard]]
+    assert ["addprop", "hall", hall, w.generations["hall"], "guard", guard, [ME, "rc"]] in w.sent
+    assert ["move", "guard", guard, w.generations["guard"], hall] in w.sent
+    assert w.sent[-1] == [
+        "link",
+        [["hall", hall, w.generations["hall"]], ["guard", guard, w.generations["guard"]]],
+    ]
     assert w.saved == w.registry
 
 
@@ -93,8 +104,68 @@ def test_a_failed_create_skips_only_the_ops_that_need_it():
     outcome = run(w)
     failed = {label for label, _ in outcome.failed}
     assert failed == {"create guard (Guard)", "addprop @hall.guard", "move @guard @hall"}
-    assert w.sent[-1] == ["link", [w.registry["hall"]]]
+    assert w.sent[-1] == ["link", [["hall", w.registry["hall"], w.generations["hall"]]]]
     assert w.saved == {"hall": w.registry["hall"]}
+
+
+def test_failed_create_does_not_adopt_an_unrelated_post_create_binding():
+    unrelated = Obj(40)
+
+    class FailedCreateWorld(FakeWorld):
+        def _op(self, op):
+            if op[0] == "create":
+                self.sent.append(op)
+                self.registry[op[1]] = unrelated
+                self.names[unrelated] = ("Unrelated", Obj(5))
+                return [0, "E_QUOTA", "no quota"]
+            return super()._op(op)
+
+    w = FailedCreateWorld()
+    refs = Refs(player=ME, sysrefs={"thing": Obj(5)})
+    files = {"child": ObjectDef(key="child", name="Child", parent=Ref("$", "thing"))}
+    pending = plan.build(files, {}, refs)
+
+    outcome = apply.run(w, pending, refs, files=files, log=lambda _: None)
+
+    assert outcome.failed == [("create child (Child)", "E_QUOTA: no quota")]
+    assert [op[0] for op in w.sent] == ["create", "link"]
+    assert w.sent[-1] == ["link", []]
+
+
+def test_mutation_is_rejected_when_the_key_was_rebound_after_planning():
+    planned, rebound = Obj(10), Obj(11)
+    mutated = []
+
+    class ReboundWorld(FakeWorld):
+        def _op(self, op):
+            self.sent.append(op)
+            if len(op) >= 4 and op[0] == "name" and isinstance(op[1], str):
+                _, key, expected, nonce, *_ = op
+                if self.registry.get(key) != expected or self.generations.get(key) != nonce:
+                    return [0, "E_INVARG", f"key {key} was rebound"]
+                mutated.append(expected)
+                return [1, 1]
+            if op[0] == "name":
+                mutated.append(op[1])
+                return [1, 1]
+            return super()._op(op)
+
+    w = ReboundWorld()
+    w.registry = {"hall": rebound}
+    w.generations = {"hall": "new-generation"}
+    refs = Refs(player=ME, registry={"hall": planned})
+    refs.generations = {"hall": "planned-generation"}
+
+    outcome = apply.run(
+        w,
+        plan.Plan(ops=[("name", Ref("@", "hall"), "New Hall")]),
+        refs,
+        files={},
+        log=lambda _: None,
+    )
+
+    assert mutated == []
+    assert outcome.failed == [("name @hall New Hall", "E_INVARG: key hall was rebound")]
 
 
 def test_orphans_are_only_recycled_when_destroy_is_explicit():
@@ -102,20 +173,75 @@ def test_orphans_are_only_recycled_when_destroy_is_explicit():
     p = plan.Plan(destroys={"old": old})
 
     kept = FakeWorld()
-    kept.registry = {"old": old}
-    kept_refs = Refs(player=ME, registry={"old": old})
+    kept_refs = verify_bindings(kept, {"old": old})
     apply.run(kept, p, kept_refs, files={}, log=lambda _: None)
     assert kept.sent == []
     assert kept.saved == {"old": old}
 
     destroyed = FakeWorld()
-    destroyed.registry = {"old": old}
-    destroyed_refs = Refs(player=ME, registry={"old": old})
+    destroyed_refs = verify_bindings(destroyed, {"old": old})
     outcome = apply.run(destroyed, p, destroyed_refs, files={}, destroy=True, log=lambda _: None)
     assert outcome.failed == []
-    assert destroyed.sent == [["destroy", "old", old]]
+    assert destroyed.sent == [["destroy", "old", old, "generation-old"]]
     assert destroyed_refs.registry == {}
     assert destroyed.saved == {}
+
+
+def test_destroy_phase_is_skipped_after_a_create_failure():
+    old = Obj(201)
+    w = FakeWorld(fail={"child"})
+    w.registry = {"old": old}
+    refs = Refs(player=ME, registry={"old": old}, sysrefs={"thing": Obj(5)})
+    files = {"child": ObjectDef(key="child", name="Child", parent=Ref("$", "thing"))}
+    pending = plan.build(files, {}, refs)
+    messages = []
+
+    outcome = apply.run(w, pending, refs, files=files, destroy=True, log=messages.append)
+
+    assert [op[0] for op in w.sent] == ["create", "link"]
+    assert not any(op[0] == "destroy" for op in w.sent)
+    assert w.registry == {"old": old}
+    assert outcome.failed == [("create child (Child)", "E_QUOTA: no quota")]
+    assert any("skipping recycling" in message for message in messages)
+
+
+def test_destroy_refuses_a_reused_object_number_with_the_wrong_generation():
+    reused = Obj(201)
+
+    class ReusedNumberWorld(FakeWorld):
+        def _op(self, op):
+            self.sent.append(op)
+            if len(op) == 4 and op[0] == "destroy":
+                _, key, expected, nonce = op
+                if (
+                    self.registry.get(key) != expected
+                    or self.generations.get(key) != nonce
+                    or self.object_generations.get(expected) != nonce
+                ):
+                    return [0, "E_INVARG", f"generation mismatch for {key}"]
+            if op[0] == "destroy":
+                self.registry.pop(op[1], None)
+                return [1, 1]
+            return super()._op(op)
+
+    w = ReusedNumberWorld()
+    w.registry = {"old": reused}
+    w.generations = {"old": "old-generation"}
+    w.object_generations = {reused: "new-generation"}
+    refs = Refs(player=ME, registry={"old": reused})
+    refs.generations = {"old": "old-generation"}
+
+    outcome = apply.run(
+        w,
+        plan.Plan(destroys={"old": reused}),
+        refs,
+        files={},
+        destroy=True,
+        log=lambda _: None,
+    )
+
+    assert w.registry == {"old": reused}
+    assert outcome.failed == [("recycle old (#201)", "E_INVARG: generation mismatch for old")]
 
 
 def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
@@ -124,14 +250,13 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
 
     class PartlyFailedRecycleWorld(FakeWorld):
         def _op(self, op):
-            if op == ["destroy", "blocked", blocked]:
+            if op == ["destroy", "blocked", blocked, "generation-blocked"]:
                 self.sent.append(op)
                 return [0, "E_PERM", "recycle refused"]
             return super()._op(op)
 
     w = PartlyFailedRecycleWorld()
-    w.registry = {"blocked": blocked, "removable": removable}
-    refs = Refs(player=ME, registry=dict(w.registry))
+    refs = verify_bindings(w, {"blocked": blocked, "removable": removable})
 
     outcome = apply.run(
         w,
@@ -143,15 +268,15 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
     )
 
     assert w.sent == [
-        ["destroy", "blocked", blocked],
-        ["destroy", "removable", removable],
+        ["destroy", "blocked", blocked, "generation-blocked"],
+        ["destroy", "removable", removable, "generation-removable"],
     ]
     assert outcome.failed == [("recycle blocked (#201)", "E_PERM: recycle refused")]
     assert refs.registry == {"blocked": blocked}
     assert w.saved == {"blocked": blocked}
 
 
-def test_destroy_refuses_orphan_rebound_by_initialize_callback():
+def test_destroy_is_skipped_when_initialize_rebinds_an_orphan_and_create_fails():
     old, child = Obj(100), Obj(200)
     recycled = []
 
@@ -163,24 +288,13 @@ def test_destroy_refuses_orphan_rebound_by_initialize_callback():
                 self.registry.pop("auto_child")
                 self.registry["auto_child"] = child
                 return [0, "E_INVARG", "object #200 is already registered as auto_child; cannot bind key child"]
-            if op[0] == "destroy":
-                self.sent.append(op)
-                key, expected = op[1:]
-                current = self.registry.get(key)
-                if current is not None:
-                    if current != expected:
-                        return [0, "E_INVARG", f"key {key} is now registered as {current}"]
-                    recycled.append(current)
-                    del self.registry[key]
-                return [1, 1]
             return super()._op(op)
 
         def read_registry(self):
-            return registry_value([list(self.registry), list(self.registry.values())])
+            return Registry(self.registry, self.generations)
 
     w = RebindingWorld()
-    w.registry = {"auto_child": old}
-    refs = Refs(player=ME, registry=w.read_registry())
+    refs = verify_bindings(w, {"auto_child": old})
     files = {"child": ObjectDef(key="child", name="Child", parent=Obj(5))}
     pending = plan.build(files, {}, refs)
     assert not pending.problems
@@ -188,10 +302,9 @@ def test_destroy_refuses_orphan_rebound_by_initialize_callback():
     outcome = apply.run(w, pending, refs, files=files, destroy=True, log=lambda _: None)
 
     assert recycled == []
-    assert ["destroy", "auto_child", old] in w.sent
+    assert not any(op[0] == "destroy" for op in w.sent)
     assert outcome.failed == [
         ("create child (Child)", "E_INVARG: object #200 is already registered as auto_child; cannot bind key child"),
-        ("recycle auto_child (#100)", "E_INVARG: key auto_child is now registered as #200"),
     ]
     assert refs.registry == w.registry == w.saved == {"auto_child": child}
 
@@ -204,41 +317,40 @@ def test_destroy_recovers_an_already_recycled_orphan_in_one_helper_call():
             self.sent.append(op)
             if op == ["recycle", old]:
                 return [0, "E_INVARG", "invalid object"]
-            if op == ["destroy", "old", old]:
+            if op == ["destroy", "old", old, "generation-old"]:
                 self.registry.pop("old", None)
                 return [1, 1]
             pytest.fail(f"unexpected operation: {op}")
 
     w = GoneWorld()
-    w.registry = {"old": old}
-    refs = Refs(player=ME, registry=dict(w.registry))
+    refs = verify_bindings(w, {"old": old})
     for _ in range(2):
         pending = plan.build({}, {}, refs)
         outcome = apply.run(w, pending, refs, files={}, destroy=True, log=lambda _: None)
         assert outcome.failed == []
         assert refs.registry == w.saved == {}
-    assert w.batches == [[["destroy", "old", old]]]
+    assert w.batches == [[["destroy", "old", old, "generation-old"]]]
 
 
 def test_ops_are_split_before_the_configured_batch_limit():
     hall = Obj(200)
     w = FakeWorld()
-    w.registry = {"hall": hall}
-    refs = Refs(player=ME, registry={"hall": hall})
+    refs = verify_bindings(w, {"hall": hall})
     ops = [("name", Ref("@", "hall"), "A"), ("name", Ref("@", "hall"), "B")]
-    w.transport.batch_bytes = len(moolit.serialize(["name", hall, "A"]))
+    first = ["name", "hall", hall, "generation-hall", "A"]
+    second = ["name", "hall", hall, "generation-hall", "B"]
+    w.transport.batch_bytes = len(moolit.serialize(first))
 
     outcome = apply.run(w, plan.Plan(ops=ops), refs, files={}, log=lambda _: None)
     assert outcome.failed == []
-    assert w.batches == [[["name", hall, "A"]], [["name", hall, "B"]]]
+    assert w.batches == [[first], [second]]
 
 
 def test_apply_encodes_strings_for_the_moor_dialect():
     hall = Obj(200)
     w = FakeWorld()
-    w.registry = {"hall": hall}
+    refs = verify_bindings(w, {"hall": hall})
     w.transport.literal_dialect = moolit.MOOR
-    refs = Refs(player=ME, registry={"hall": hall})
 
     outcome = apply.run(
         w,
@@ -249,7 +361,7 @@ def test_apply_encodes_strings_for_the_moor_dialect():
     )
 
     assert outcome.failed == []
-    assert w.sent == [["name", hall, "Hé\n"]]
+    assert w.sent == [["name", "hall", hall, "generation-hall", "Hé\n"]]
 
 
 def test_a_short_result_list_is_reported_and_state_is_still_saved():
@@ -265,8 +377,7 @@ def test_a_short_result_list_is_reported_and_state_is_still_saved():
 
     hall = Obj(200)
     w = ShortReplyWorld()
-    w.registry = {"hall": hall}
-    refs = Refs(player=ME, registry={"hall": hall})
+    refs = verify_bindings(w, {"hall": hall})
     p = plan.Plan(ops=[("name", Ref("@", "hall"), "A"), ("flags", Ref("@", "hall"), "r")])
 
     outcome = apply.run(w, p, refs, files={}, log=lambda _: None)
@@ -296,8 +407,7 @@ def test_a_malformed_helper_result_is_failed_and_state_is_still_saved(reply, exp
 
     hall = Obj(200)
     w = MalformedReplyWorld()
-    w.registry = {"hall": hall}
-    refs = Refs(player=ME, registry={"hall": hall})
+    refs = verify_bindings(w, {"hall": hall})
     p = plan.Plan(ops=[("name", Ref("@", "hall"), "A")])
 
     outcome = apply.run(w, p, refs, files={}, log=lambda _: None)

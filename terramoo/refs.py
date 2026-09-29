@@ -19,11 +19,20 @@ class UnresolvedRef(KeyError):
     pass
 
 
+class Registry(dict[str, Obj]):
+    """A registry mapping plus the generation nonce stored beside each key."""
+
+    def __init__(self, values=(), generations: dict[str, str | None] | None = None):
+        super().__init__(values)
+        self.generations = dict(generations or {})
+
+
 @dataclass
 class Refs:
     player: Obj
     registry: dict[str, Obj] = field(default_factory=dict)
     sysrefs: dict[str, Obj] = field(default_factory=dict)
+    generations: dict[str, str | None] = field(default_factory=dict)
     # Keys a plan is about to create: a `@ref` to one stays a Ref until the
     # create phase has run and the registry knows its number.
     pending: set[str] = field(default_factory=set)
@@ -69,7 +78,17 @@ class Refs:
         return walk(value, self.symbolize_obj)
 
     def __post_init__(self):
+        if isinstance(self.registry, Registry):
+            self.generations = dict(self.registry.generations)
         self.reindex()
+
+    def replace_registry(self, registry: dict[str, Obj]) -> None:
+        self.registry = dict(registry)
+        self.generations = dict(getattr(registry, "generations", {}))
+        self.reindex()
+
+    def snapshot(self) -> Registry:
+        return Registry(self.registry, self.generations)
 
     def reindex(self):
         self._by_obj = {o: n for n, o in self.registry.items()}
@@ -84,9 +103,11 @@ class Refs:
 
 
 def save_state(path: Path, player: Obj, registry: dict[str, Obj], toolbox: Obj | None) -> None:
+    generations = getattr(registry, "generations", {})
     data = {
         "player": player.num,
         "toolbox": toolbox.num if toolbox else None,
         "registry": {k: v.num for k, v in sorted(registry.items())},
+        "generations": {k: generations.get(k) for k in sorted(registry)},
     }
     path.write_text(json.dumps(data, indent=2) + "\n")

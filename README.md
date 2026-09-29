@@ -16,6 +16,7 @@ tmoo bootstrap           # once per MOO: creates the toolbox, installs its verbs
 tmoo status              # registry vs files vs objects owned but unmanaged
 tmoo adopt --owned       # put every owned object under management, writing files
 tmoo adopt '#123' key    # or one at a time
+tmoo adopt '#123' key --verify  # confirm/stamp a legacy binding after inspecting it
 tmoo pull [key...]       # files <- MOO
 tmoo plan                # what apply would do
 tmoo apply [--destroy]   # MOO <- files (asks first; -y skips; --destroy recycles orphans)
@@ -114,21 +115,32 @@ world; `override` is the one keyword of ours.
   `terramoo/helper/`. They are plain LambdaMOO 1.8, so one copy runs on
   every server, and they refuse any caller but their owner. Re-run
   `tmoo bootstrap` after upgrading terramoo to install updated helpers.
-  The idempotent destroy operation requires the updated `tmoo_apply` helper:
-  run `tmoo bootstrap` before using `apply --destroy` with this version.
-- The toolbox holds the *registry*, `key -> #nnn`. It lives in the MOO, so a
+  Export, adoption and apply check the installed helper version and give that
+  bootstrap instruction before sending an incompatible request.
+- The toolbox holds the *registry*, `key -> {#nnn, generation nonce}`. The
+  same protected nonce is stored on the object and ignored by exports, so a
+  recycled and reused object number cannot impersonate the managed object. It
+  lives in the MOO, so a
   rollback rolls it back too; `worlds/<world>/state.json` is a local copy.
 - `plan` diffs the files against the live objects. A `@ref` to a key with no
   file is reported before anything runs.
 - `apply` creates new objects parents first (recreating any the MOO has
   lost), re-reads them to correct what the core's `initialize` set, then
-  sends the rest in batches. A failed op is reported and the rest carry on.
+  sends the rest in batches. Every mutation compares the key, expected object
+  and generation immediately before it runs. A failed op is reported and the
+  rest carry on.
   If `initialize` registers a new object under another key, create reports
   a conflict and preserves that registration and object.
-  Nothing is recycled without `--destroy`.
-  Destroy checks that the key still names the expected object, recycles it
+  Nothing is recycled without `--destroy`, and recycling is skipped whenever
+  a create or normal operation in that run failed.
+  Destroy checks that the key still names the expected object generation, recycles it
   if it exists, and unregisters it in one helper call. Retrying also removes
   registrations for objects already gone; a failed recycle keeps the entry.
+- Registries created by older terramoo versions have no generation nonces.
+  Status marks these bindings unverified; export, mutation, and destruction
+  refuse them. Inspect the live object, then run
+  `tmoo adopt '#123' key --verify` to stamp the confirmed binding. Re-run
+  `tmoo bootstrap` first when terramoo reports outdated toolbox helpers.
 - Both transports send one expression per request and parse its
   `toliteral()` text. Telnet tags its answer so other players' chatter is
   ignored (see `terramoo/transport/telnet.py`).

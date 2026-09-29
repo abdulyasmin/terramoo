@@ -22,9 +22,9 @@ class ExportWorld:
 
     def eval(self, call):
         assert call.verb == "tmoo_export"
-        objects = moolit.parse(call.arg)
-        self.calls.append(objects)
-        return [self.records[obj] for obj in objects]
+        bindings = moolit.parse(call.arg)
+        self.calls.append(bindings)
+        return [self.records[binding[1]] for binding in bindings]
 
 
 def test_export_chunks_requests_and_preserves_vanished_objects():
@@ -41,6 +41,26 @@ def test_export_chunks_requests_and_preserves_vanished_objects():
     assert [len(call) for call in world.calls] == [export_mod.CHUNK, 2]
     assert result["object_4"] is None
     assert result["object_10"].name == "Object 10"
+
+
+def test_export_refuses_a_reused_object_number_with_the_wrong_generation():
+    obj = Obj(10)
+    record = [obj, "Unrelated", Obj(0), Obj(-1), Obj(1), "", [], []]
+
+    class ReusedNumberWorld(ExportWorld):
+        def eval(self, call):
+            bindings = moolit.parse(call.arg)
+            if bindings and isinstance(bindings[0], list):
+                key, bound, nonce = bindings[0]
+                assert (key, bound, nonce) == ("hall", obj, "old-generation")
+                raise MooError("hall: object generation does not match the registry")
+            return [record]
+
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+    refs.generations = {"hall": "old-generation"}
+
+    with pytest.raises(MooError, match="hall: object generation does not match"):
+        export_mod.export(ReusedNumberWorld({obj: record}), refs, ["hall"])
 
 
 def test_export_decodes_refs_owners_flags_properties_and_verbs():

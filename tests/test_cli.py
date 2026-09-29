@@ -16,7 +16,11 @@ from terramoo.world import World, registry_value
 class AdoptWorld:
     def __init__(self, registry=None, reply=None):
         registry = registry or {}
-        self.raw_registry = [list(registry), list(registry.values())]
+        self.raw_registry = [
+            list(registry),
+            list(registry.values()),
+            [f"existing-{key}" for key in registry],
+        ]
         self.reply = reply
         self.sent = []
         self.saved = []
@@ -178,13 +182,15 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
     def register(call):
         _, arg = call
         results = []
-        for _, key, obj in moolit.parse(arg):
+        for _, key, obj, nonce in moolit.parse(arg):
             existing = next((i for i, old in enumerate(world.raw_registry[0]) if old.lower() == key.lower()), None)
             if existing is None:
                 world.raw_registry[0].append(key)
                 world.raw_registry[1].append(obj)
+                world.raw_registry[2].append(nonce)
             else:
                 world.raw_registry[1][existing] = obj
+                world.raw_registry[2][existing] = nonce
             results.append([1, obj])
         return results
 
@@ -195,7 +201,9 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
 
     cli.cmd_adopt(SimpleNamespace(owned=True, object=None, key=None))
 
-    assert world.raw_registry == [["Hall", "hall_2"], [Obj(10), Obj(11)]]
+    assert world.raw_registry[:2] == [["Hall", "hall_2"], [Obj(10), Obj(11)]]
+    assert world.raw_registry[2][0] == "existing-Hall"
+    assert world.raw_registry[2][1]
     assert exported == ["hall_2"]
     assert world.saved == [{"Hall": Obj(10), "hall_2": Obj(11)}]
 
@@ -210,7 +218,7 @@ def test_adopt_refuses_to_rebind_an_occupied_key(monkeypatch, key):
         cli.cmd_adopt(SimpleNamespace(owned=False, object="#11", key=key))
 
     assert world.sent == []
-    assert world.raw_registry == [["hall"], [Obj(10)]]
+    assert world.raw_registry == [["hall"], [Obj(10)], ["existing-hall"]]
     assert world.saved == []
 
 
@@ -218,7 +226,7 @@ def test_adopt_failed_registration_exports_nothing_and_raises(monkeypatch):
     world = AdoptWorld()
 
     def reject(call):
-        world.raw_registry = [["Mine"], [Obj(11)]]
+        world.raw_registry = [["Mine"], [Obj(11)], ["other-generation"]]
         return [[0, "E_INVARG", "object #10 is already registered as other"]]
 
     world.reply = reject
@@ -237,7 +245,9 @@ def test_adopt_exports_the_registry_spelling_after_a_success(monkeypatch):
     world = AdoptWorld()
 
     def succeed(call):
-        world.raw_registry = [["Mine"], [Obj(10)]]
+        _, arg = call
+        _, _, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [["Mine"], [obj], [nonce]]
         return [[1, Obj(10)]]
 
     world.reply = succeed
@@ -249,6 +259,28 @@ def test_adopt_exports_the_registry_spelling_after_a_success(monkeypatch):
 
     assert exported == ["Mine"]
     assert world.saved == [{"Mine": Obj(10)}]
+
+
+def test_adopt_verify_stamps_an_existing_legacy_binding(monkeypatch):
+    world = AdoptWorld()
+    world.raw_registry = [["hall"], [Obj(10)]]
+
+    def verify(call):
+        _, arg = call
+        _, key, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [[key], [obj], [nonce]]
+        return [[1, obj]]
+
+    world.reply = verify
+    exported = []
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys: exported.extend(keys) or len(keys))
+
+    cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="hall", verify=True))
+
+    assert world.raw_registry[0:2] == [["hall"], [Obj(10)]]
+    assert world.raw_registry[2][0]
+    assert exported == ["hall"]
 
 
 @pytest.mark.parametrize("reply", [7, [], [[1]]])
