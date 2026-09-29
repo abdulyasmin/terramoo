@@ -150,8 +150,12 @@ def cmd_adopt(args):
         if not args.object or not args.key:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
         o = parse_object_arg(args.object)
-        if args.key in refs.registry:
-            raise MooError(f"{args.key} is already {refs.registry[args.key]}")
+        existing_key = next((key for key in refs.registry if key.lower() == args.key.lower()), None)
+        if existing_key is not None:
+            raise MooError(f"{args.key} is already {refs.registry[existing_key]}")
+        managed_as = next((key for key, obj in refs.registry.items() if obj == o), None)
+        if managed_as is not None:
+            raise MooError(f"{o} is already managed as {managed_as}")
         new.append((args.key, o))
     if not new:
         print("nothing to adopt")

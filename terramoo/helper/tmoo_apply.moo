@@ -30,6 +30,12 @@ for op in (ops)
         r = op[3];
       endif
       i = op[2] in reg[1];
+      if (kind == "register")
+        j = r in reg[2];
+        if (j && j != i)
+          raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j]));
+        endif
+      endif
       if (i)
         reg[2][i] = r;
       else

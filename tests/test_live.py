@@ -88,6 +88,13 @@ def test_round_trip(world, capsys):
     assert world.eval(f"{door} in {hall}.exits")
     assert world.eval(f"{hall}.banner")[1] == door
 
+    # The helper itself preserves registry uniqueness if a stale client tries
+    # to register an object already managed under another key.
+    duplicate = [["register", "tmoo_test_duplicate", hall]]
+    result = world.eval(world.helper("tmoo_apply", world.transport.serialize(duplicate)))
+    assert result[0][0] == 0
+    assert world.read_registry() == reg
+
     # pull writes back exactly what was applied.
     run(capsys, "pull")
     assert (world.objects_dir / "tmoo_test_hall.moo").read_text() == HALL

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import cli, objdef
+from terramoo import cli, moolit, objdef
 from terramoo.apply import Outcome
 from terramoo.cli import parse_object_arg
 from terramoo.errors import MooError
@@ -71,6 +71,45 @@ def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch
 
     with pytest.raises(MooError, match="toolbox has a malformed registry"):
         cli.cmd_apply(SimpleNamespace(yes=True, destroy=True))
+
+
+def test_adopt_rejects_managed_object_before_sending_or_persisting(monkeypatch):
+    class AdoptWorld:
+        def __init__(self):
+            self.raw_registry = [["hall"], [Obj(10)]]
+            self.sent = []
+            self.saved = []
+            self.transport = SimpleNamespace(serialize=moolit.serialize)
+
+        def refs(self):
+            return Refs(player=Obj(1), registry=registry_value(self.raw_registry))
+
+        def helper(self, verb, arg):
+            return verb, arg
+
+        def eval(self, call):
+            self.sent.append(call)
+            _, arg = call
+            for _, key, obj in moolit.parse(arg):
+                self.raw_registry[0].append(key)
+                self.raw_registry[1].append(obj)
+            return [[1, Obj(10)]]
+
+        def read_registry(self):
+            return registry_value(self.raw_registry)
+
+        def save_state(self, registry):
+            self.saved.append(dict(registry))
+
+    world = AdoptWorld()
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match=r"#10 is already managed as hall"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="door"))
+
+    assert world.sent == []
+    assert world.raw_registry == [["hall"], [Obj(10)]]
+    assert world.saved == []
 
 
 def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monkeypatch):
