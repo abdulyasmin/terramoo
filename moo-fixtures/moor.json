@@ -1,0 +1,19 @@
+{
+  "about": "mooR object-reference literals shared by the MOO clients' object-reference validation.",
+  "schema": "objectReferences: complete mooR object source -> whether it is accepted.",
+  "source": "https://timbran.org/book/2.0-dev/html/the-database/moo-value-types.html#object-type",
+  "objectReferences": [
+    {
+      "input": "#048D05-1234567890",
+      "accepted": true
+    },
+    {
+      "input": "#1A2B3C-4567891234",
+      "accepted": true
+    },
+    {
+      "input": "#048D05-1234567890; shutdown()",
+      "accepted": false
+    }
+  ]
+}

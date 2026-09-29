@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from terramoo import moolit
+from terramoo.cli import parse_object_arg
 from terramoo.errors import MooError
 from terramoo.transport.mcp import McpTransport
 from terramoo.transport.telnet import DONT, IAC, WONT, _Wire
@@ -25,6 +26,7 @@ LITERALS = load("literals.json")
 GATE = load("gate-contract.json")
 MCP21 = load("mcp21.json")
 TELNET = load("telnet.json")
+MOOR = load("moor.json")
 
 
 def test_corpus_source_hashes_match():
@@ -34,7 +36,7 @@ def test_corpus_source_hashes_match():
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in FIXTURES.glob("*.json")
     }
-    assert lines[:2] == ["AgiMoo", "commit b616dd5"]
+    assert lines[:2] == ["AgiMoo", "commit 5fb0cde"]
     assert recorded == actual
 
 
@@ -150,6 +152,24 @@ TELNET_REPLY_CASES = [case for case in TELNET["cases"] if case["id"] not in {"ec
 def test_corpus_telnet_negotiation_replies(case):
     _, replies = filter_telnet(case)
     assert replies == b"".join(bytes(reply) for reply in case["replies"])
+
+
+@pytest.mark.parametrize("case", TELNET["lineCases"], ids=lambda case: case["id"])
+def test_corpus_telnet_lines(case):
+    wire = _Wire(_RecordingSocket())
+    for chunk in case["chunks"]:
+        wire._feed(bytes(chunk))
+    lines = [line.encode("utf-8", "surrogateescape") for line in wire.lines]
+    assert lines == [bytes(line) for line in case["lines"]]
+
+
+@pytest.mark.parametrize("case", MOOR["objectReferences"], ids=lambda case: case["input"])
+def test_corpus_moor_object_references(case):
+    if case["accepted"]:
+        assert isinstance(parse_object_arg(case["input"]), moolit.Obj)
+    else:
+        with pytest.raises(MooError):
+            parse_object_arg(case["input"])
 
 
 def test_telnet_refusal_policy_for_corpus_echo_and_mcp_cases():

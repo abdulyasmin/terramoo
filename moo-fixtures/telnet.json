@@ -1,6 +1,6 @@
 {
-  "about": "Telnet corpus v1: byte chunks mapped to payload bytes, negotiation replies, and echo/MCP state events.",
-  "schema": "Client-side Telnet corpus v1. Each case feeds chunks (arrays of unsigned bytes) into a fresh filter; data is concatenated payload, replies are negotiation byte arrays, echo/mcp are state notifications. Chunk boundaries must not change results. Policy accepts ECHO and MCP option 70, refuses others.",
+  "about": "Telnet corpus v1: byte chunks mapped to payload bytes, negotiation replies, echo/MCP state events, and NVT lines.",
+  "schema": "Each cases entry feeds chunks (arrays of unsigned bytes) into a fresh filter; data is concatenated payload, replies are negotiation byte arrays, and echo/mcp are state notifications. Each lineCases entry maps chunks to complete NVT lines without terminators. Chunk boundaries must not change results. Policy accepts ECHO and MCP option 70, refuses others; lines recognize CR LF and LF, and CR NUL represents a literal CR.",
   "sources": [
     "toaststunt/src/network.cc:386-470 (IAC framing), 1748-1758 (WILL/WONT ECHO)",
     "web/AGENTS.md: outgoing IAC doubling and server ECHO",
@@ -221,6 +221,35 @@
       "replies": [],
       "echo": [],
       "mcp": []
+    }
+  ],
+  "lineCases": [
+    {
+      "id": "crlf-lf-crnul-nul",
+      "chunks": [
+        [111, 110, 101, 13],
+        [10, 116, 119, 111, 10, 116, 104, 114, 101, 101, 13],
+        [0, 120, 0, 13, 10, 13, 10, 112, 97, 114, 116, 105, 97, 108]
+      ],
+      "lines": [
+        [111, 110, 101],
+        [116, 119, 111],
+        [116, 104, 114, 101, 101, 13, 120, 0],
+        []
+      ]
+    },
+    {
+      "id": "iac-before-line-ending",
+      "chunks": [
+        [65, 255, 251],
+        [42, 13],
+        [10, 66, 255],
+        [255, 13, 10]
+      ],
+      "lines": [
+        [65],
+        [66, 255]
+      ]
     }
   ]
 }
