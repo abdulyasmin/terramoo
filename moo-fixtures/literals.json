@@ -1,0 +1,287 @@
+{
+  "about": "MOO corpus v1: string encodings, flat string-list parses, object-reference validation, and typed grammar cases.",
+  "schema": "ToastStunt corpus v1. strings: value -> toliteral display. stringLists: literal -> flat string array, null means not that shape. objectReferences: restricted tool object syntax. values: general grammar semantics for vendors; status distinguishes literals, expressions, display-only and unsupported dialect forms. JSON escapes encode bytes/characters, not MOO escapes.",
+  "sources": [
+    "toaststunt/src/list.cc:449-519 (unparse_value)",
+    "toaststunt/src/parser.y:354-438, 700-739, 902-1046 (grammar and lexer)",
+    "toaststunt/src/keywords.gperf (error keywords)"
+  ],
+  "strings": [
+    {
+      "id": "empty",
+      "value": "",
+      "literal": "\"\""
+    },
+    {
+      "id": "quotes-and-backslash",
+      "value": "say \"hi\" \\ path",
+      "literal": "\"say \\\"hi\\\" \\\\ path\""
+    },
+    {
+      "id": "unicode",
+      "value": "café مرحبا 👍",
+      "literal": "\"café مرحبا 👍\""
+    },
+    {
+      "id": "literal-backslash-n",
+      "value": "\\n\\u0041",
+      "literal": "\"\\\\n\\\\u0041\""
+    },
+    {
+      "id": "controls-display",
+      "value": "a\nb\tc\r",
+      "literal": "\"a\nb\tc\r\"",
+      "note": "toliteral display, not compilable source: parser.y rejects LF inside quotes."
+    }
+  ],
+  "stringLists": [
+    {
+      "id": "empty",
+      "literal": "{}",
+      "value": []
+    },
+    {
+      "id": "spaced-empty",
+      "literal": " { \t } ",
+      "value": []
+    },
+    {
+      "id": "escaped",
+      "literal": "{\"a\", \"b\\\"c\", \"d\\\\e\"}",
+      "value": [
+        "a",
+        "b\"c",
+        "d\\e"
+      ]
+    },
+    {
+      "id": "not-json-escapes",
+      "literal": "{\"\\n\", \"\\u0041\", \"\\t\"}",
+      "value": [
+        "n",
+        "u0041",
+        "t"
+      ]
+    },
+    {
+      "id": "unicode",
+      "literal": "{\"مرحبا\", \"👍\"}",
+      "value": [
+        "مرحبا",
+        "👍"
+      ]
+    },
+    {
+      "id": "reject-comma-only",
+      "literal": "{,}",
+      "value": null
+    },
+    {
+      "id": "reject-leading-comma",
+      "literal": "{,\"a\"}",
+      "value": null
+    },
+    {
+      "id": "reject-trailing-comma",
+      "literal": "{\"a\",}",
+      "value": null
+    },
+    {
+      "id": "reject-double-comma",
+      "literal": "{\"a\",,\"b\"}",
+      "value": null
+    },
+    {
+      "id": "reject-missing-comma",
+      "literal": "{\"a\" \"b\"}",
+      "value": null
+    },
+    {
+      "id": "reject-adjacent-strings",
+      "literal": "{\"a\"\"b\"}",
+      "value": null
+    },
+    {
+      "id": "reject-unclosed-string",
+      "literal": "{\"unclosed}",
+      "value": null
+    },
+    {
+      "id": "reject-escaped-closing-quote",
+      "literal": "{\"a\\\"}",
+      "value": null
+    },
+    {
+      "id": "reject-mixed-types",
+      "literal": "{\"a\", 1}",
+      "value": null
+    },
+    {
+      "id": "reject-nested-list",
+      "literal": "{{\"a\"}}",
+      "value": null
+    },
+    {
+      "id": "reject-trailing-input",
+      "literal": "{} trailing",
+      "value": null
+    }
+  ],
+  "objectReferences": [
+    {
+      "input": "#0",
+      "accepted": true
+    },
+    {
+      "input": "#123",
+      "accepted": true
+    },
+    {
+      "input": "#-1",
+      "accepted": true
+    },
+    {
+      "input": "#-123",
+      "accepted": true
+    },
+    {
+      "input": "$room",
+      "accepted": true
+    },
+    {
+      "input": "$a.b",
+      "accepted": true
+    },
+    {
+      "input": "$_a.b_2",
+      "accepted": true
+    },
+    {
+      "input": "-#1",
+      "accepted": false
+    },
+    {
+      "input": "$1room",
+      "accepted": false
+    },
+    {
+      "input": "$a.2b",
+      "accepted": false
+    },
+    {
+      "input": "$a..b",
+      "accepted": false
+    },
+    {
+      "input": "#123\n",
+      "accepted": false
+    },
+    {
+      "input": "#123.name",
+      "accepted": false
+    },
+    {
+      "input": "#1; shutdown()",
+      "accepted": false
+    },
+    {
+      "input": "#550e8400-e29b-41d4-a716-446655440000",
+      "accepted": false
+    },
+    {
+      "input": "#[550e8400-e29b-41d4-a716-446655440000]",
+      "accepted": false
+    }
+  ],
+  "values": [
+    {
+      "id": "leading-dot-float",
+      "literal": ".5",
+      "kind": "FLOAT",
+      "value": 0.5,
+      "canonical": "0.5",
+      "status": "literal"
+    },
+    {
+      "id": "negative-leading-dot",
+      "literal": "-.5",
+      "kind": "FLOAT",
+      "value": -0.5,
+      "canonical": "-0.5",
+      "status": "expression"
+    },
+    {
+      "id": "exponent",
+      "literal": ".5e+2",
+      "kind": "FLOAT",
+      "value": 50,
+      "canonical": "50.0",
+      "status": "literal"
+    },
+    {
+      "id": "trailing-dot",
+      "literal": "1.",
+      "kind": "FLOAT",
+      "value": 1,
+      "canonical": "1.0",
+      "status": "literal"
+    },
+    {
+      "id": "error",
+      "literal": "E_PERM",
+      "kind": "ERR",
+      "value": "E_PERM",
+      "canonical": "E_PERM",
+      "status": "literal"
+    },
+    {
+      "id": "waif",
+      "literal": "[[class = #319, owner = #2]]",
+      "kind": "WAIF",
+      "status": "display-only",
+      "note": "list.cc unparse_value; no waif literal production in parser.y.",
+      "value": {
+        "class": "#319",
+        "owner": "#2"
+      }
+    },
+    {
+      "id": "anonymous",
+      "literal": "*anonymous*",
+      "kind": "ANON",
+      "status": "display-only"
+    },
+    {
+      "id": "corified-chain",
+      "literal": "$a.b",
+      "kind": "reference",
+      "status": "expression",
+      "expansion": "#0.(\"a\").(\"b\")",
+      "note": "Value depends on the database; not a string or fixed object number."
+    },
+    {
+      "id": "uuid-object",
+      "literal": "#550e8400-e29b-41d4-a716-446655440000",
+      "status": "unsupported",
+      "note": "parser.y accepts only decimal object numbers; no UUID object token in this server."
+    },
+    {
+      "id": "uuid-bracketed",
+      "literal": "#[550e8400-e29b-41d4-a716-446655440000]",
+      "status": "unsupported"
+    },
+    {
+      "id": "error-with-message",
+      "literal": "E_PERM(\"msg\")",
+      "status": "unsupported",
+      "note": "Errors are keyword constants, not constructors. Gate failures carry code and msg separately."
+    },
+    {
+      "id": "unknown-error-with-message",
+      "literal": "E_X(\"msg\")",
+      "status": "unsupported",
+      "note": "E_X is not an error keyword in keywords.gperf."
+    }
+  ],
+  "serverRevision": "5acd28d08ae64cd5e56c6d834c1d7d9718298250"
+}

@@ -17,16 +17,13 @@ class FakeMoo:
     """Answers each `;;` request with whatever `reply(tag, line)` returns."""
 
     def __init__(self, reply, banner=b"Welcome!\r\n"):
-        self.srv = socket.socket()
-        self.srv.bind(("127.0.0.1", 0))
-        self.srv.listen(1)
-        self.port = self.srv.getsockname()[1]
+        self.client, self.srv = socket.socketpair()
         self.reply, self.banner = reply, banner
         self.received: list[str] = []
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self):
-        conn, _ = self.srv.accept()
+        conn = self.srv
         conn.sendall(self.banner)
         buf = b""
         while True:
@@ -63,7 +60,22 @@ def answer(value_literal, chunk=4, noise=()):
 
 
 def client(fake, **kw):
-    return Telnet("127.0.0.1", fake.port, "alice", "pw", timeout=3, connect_timeout=3, **kw)
+    transport = Telnet("local", 0, "alice", "pw", timeout=3, connect_timeout=3, **kw)
+
+    def open_fake():
+        transport._wire = _Wire(fake.client)
+        transport._drain(1.0)
+        transport._wire.send_line(transport.login_template.format(player=transport.player, password=transport.password))
+        try:
+            transport._request("player", transport.connect_timeout, login=True)
+        except MooError as error:
+            transport.close()
+            raise MooError(
+                f"could not log in to {transport.host}:{transport.port} as {transport.player}: {error}"
+            ) from None
+
+    transport._open = open_fake
+    return transport
 
 
 def test_value_is_reassembled_from_chunks_amid_noise():

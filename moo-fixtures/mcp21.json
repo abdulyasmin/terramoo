@@ -1,0 +1,150 @@
+{
+  "about": "MCP 2.1 corpus v1: line parses, serialization, and authenticated multiline sessions.",
+  "schema": "MCP 2.1 corpus v1. parse: line -> message, continuation, end, or null (not parsed). Ordered alist pairs preserve arguments; multiline fields start as empty arrays. serialize: message fields -> exact single-line wire text. sessions: authenticated simpleedit multiline delivery.",
+  "sources": [
+    "https://www.moo.mud.org/mcp/mcp2.html sections 2.2-2.3",
+    "web/AGENTS.md: MCP protocol and simpleedit server contract"
+  ],
+  "parse": [
+    {
+      "line": "#$#mcp version: 2.1 to: 2.1",
+      "expected": {
+        "kind": "msg",
+        "name": "mcp",
+        "authkey": null,
+        "alist": [
+          [
+            "version",
+            "2.1"
+          ],
+          [
+            "to",
+            "2.1"
+          ]
+        ],
+        "multiline": false,
+        "dataTag": null
+      }
+    },
+    {
+      "line": "#$#pkg-message abc value: \"a \\\"quote\\\" and \\\\ slash\"\r\n",
+      "expected": {
+        "kind": "msg",
+        "name": "pkg-message",
+        "authkey": "abc",
+        "alist": [
+          [
+            "value",
+            "a \"quote\" and \\ slash"
+          ]
+        ],
+        "multiline": false,
+        "dataTag": null
+      }
+    },
+    {
+      "line": "#$#dns-org-mud-moo-simpleedit-content key reference: #2.test type: verb content*: \"\" _data-tag: t1",
+      "expected": {
+        "kind": "msg",
+        "name": "dns-org-mud-moo-simpleedit-content",
+        "authkey": "key",
+        "alist": [
+          [
+            "reference",
+            "#2.test"
+          ],
+          [
+            "type",
+            "verb"
+          ],
+          [
+            "content",
+            []
+          ]
+        ],
+        "multiline": true,
+        "dataTag": "t1"
+      }
+    },
+    {
+      "line": "#$#* t1 content:   return \"x\";",
+      "expected": {
+        "kind": "cont",
+        "tag": "t1",
+        "key": "content",
+        "value": "  return \"x\";"
+      }
+    },
+    {
+      "line": "#$#* t1 content: ",
+      "expected": {
+        "kind": "cont",
+        "tag": "t1",
+        "key": "content",
+        "value": ""
+      }
+    },
+    {
+      "line": "#$#: t1",
+      "expected": {
+        "kind": "end",
+        "tag": "t1"
+      }
+    },
+    {
+      "line": "normal output",
+      "expected": null
+    },
+    {
+      "line": "#$\"#$#quoted output",
+      "expected": null
+    },
+    {
+      "line": "#$#bad abc missing-colon value",
+      "expected": null
+    }
+  ],
+  "serialize": [
+    {
+      "name": "pkg-message",
+      "authkey": "abc",
+      "pairs": [
+        [
+          "empty",
+          ""
+        ],
+        [
+          "value",
+          "a \"quote\" \\ slash"
+        ]
+      ],
+      "lines": [
+        "#$#pkg-message abc empty: \"\" value: \"a \\\"quote\\\" \\\\ slash\""
+      ]
+    }
+  ],
+  "sessions": [
+    {
+      "authkey": "key",
+      "lines": [
+        "#$#dns-org-mud-moo-simpleedit-content wrong reference: x type: verb name: ignored content: no",
+        "#$#dns-org-mud-moo-simpleedit-content key reference: #2.test type: verb name: test content*: \"\" _data-tag: t1",
+        "#$#* unknown content: ignored",
+        "#$#* t1 content: return \"x\";",
+        "#$#* t1 content: ",
+        "#$#: t1"
+      ],
+      "edits": [
+        {
+          "reference": "#2.test",
+          "type": "verb",
+          "name": "test",
+          "content": [
+            "return \"x\";",
+            ""
+          ]
+        }
+      ]
+    }
+  ]
+}

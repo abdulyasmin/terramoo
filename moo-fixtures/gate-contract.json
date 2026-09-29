@@ -1,0 +1,150 @@
+{
+  "about": "Hosted MCP corpus v1: public tool names and gate JSON mapped to exact success/error tool text.",
+  "schema": "Hosted MCP contract v1. toolNames is the complete public tool set. formats maps successful gate JSON to exact tool text (fmtValue); failures map code/msg to tool error text. Use a fake local gate, not a live MOO. JSON formatting and type suffixes are AgiMoo presentation policy, not toliteral.",
+  "sources": [
+    "mcp/AGENTS.md: hosted tools and native JSON/fallback gate contract",
+    "toaststunt/src/json.cc:475-540 (generate)",
+    "toaststunt/src/list.cc:449-519 (fallback display)",
+    "mcp/hosted.js: fmtValue (presentation policy only)"
+  ],
+  "toolNames": [
+    "complete",
+    "definition",
+    "eval",
+    "get_prop",
+    "get_verb",
+    "grep",
+    "help",
+    "list_props",
+    "list_verbs",
+    "set_prop",
+    "set_verb"
+  ],
+  "identity": {
+    "objnum": 152,
+    "name": "FixturePlayer",
+    "wizard": 0,
+    "programmer": 1
+  },
+  "formats": [
+    {
+      "id": "integer",
+      "gate": {
+        "ok": true,
+        "value": 42,
+        "mootype": "INT"
+      },
+      "text": "42"
+    },
+    {
+      "id": "float",
+      "gate": {
+        "ok": true,
+        "value": 0.5,
+        "mootype": "FLOAT"
+      },
+      "text": "0.5"
+    },
+    {
+      "id": "string",
+      "gate": {
+        "ok": true,
+        "value": "a\n\"b\"\\ café",
+        "mootype": "STR"
+      },
+      "text": "\"a\\n\\\"b\\\"\\\\ café\""
+    },
+    {
+      "id": "object",
+      "gate": {
+        "ok": true,
+        "value": "#-1",
+        "mootype": "OBJ"
+      },
+      "text": "\"#-1\"  (OBJ)"
+    },
+    {
+      "id": "object-like-string",
+      "gate": {
+        "ok": true,
+        "value": "#-1",
+        "mootype": "STR"
+      },
+      "text": "\"#-1\""
+    },
+    {
+      "id": "error-value",
+      "gate": {
+        "ok": true,
+        "value": "E_PERM",
+        "mootype": "ERR"
+      },
+      "text": "\"E_PERM\"  (ERR)"
+    },
+    {
+      "id": "list",
+      "gate": {
+        "ok": true,
+        "value": [
+          1,
+          "#2",
+          "E_PERM"
+        ],
+        "mootype": "LIST"
+      },
+      "text": "[1,\"#2\",\"E_PERM\"]"
+    },
+    {
+      "id": "map",
+      "gate": {
+        "ok": true,
+        "value": {
+          "key": "value"
+        },
+        "mootype": "MAP"
+      },
+      "text": "{\"key\":\"value\"}"
+    },
+    {
+      "id": "bool",
+      "gate": {
+        "ok": true,
+        "value": true,
+        "mootype": "BOOL"
+      },
+      "text": "true"
+    },
+    {
+      "id": "waif-fallback",
+      "gate": {
+        "ok": true,
+        "value": "[[class = #319, owner = #2]]",
+        "mootype": "WAIF",
+        "fallback": "literal"
+      },
+      "text": "[[class = #319, owner = #2]]"
+    },
+    {
+      "id": "nested-fallback",
+      "gate": {
+        "ok": true,
+        "value": "{*anonymous*, 1}",
+        "mootype": "LIST",
+        "fallback": "literal"
+      },
+      "text": "{*anonymous*, 1}"
+    }
+  ],
+  "failures": [
+    {
+      "id": "permission",
+      "gate": {
+        "ok": false,
+        "code": "E_PERM",
+        "msg": "Permission denied"
+      },
+      "text": "MOO error E_PERM: Permission denied"
+    }
+  ],
+  "serverRevision": "5acd28d08ae64cd5e56c6d834c1d7d9718298250"
+}

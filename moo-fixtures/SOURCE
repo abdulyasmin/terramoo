@@ -1,0 +1,8 @@
+AgiMoo
+commit b616dd5
+
+SHA-256:
+15eca88a2f4b2ddf3719edd70ed4f976d47c3925e85055bd5a511bd08bd5c815  gate-contract.json
+aaa299e63331e6901d976dbdb43aa0af324dab2c02e2c58a192ef8c699841033  literals.json
+ad9ff92593da4188b75d1f9ea9fdc734699ea1a7c295816d6498245e4fc772fd  mcp21.json
+9b4767abe96eb0cfbdcd3dd574b4fb83ef51ee5a58ed217e99ff06b27d17d355  telnet.json
