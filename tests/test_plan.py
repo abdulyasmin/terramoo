@@ -278,7 +278,7 @@ def test_plan_reports_legacy_registry_keys_without_blocking_other_changes():
     assert ("name", Ref("@", "hall"), "Great Hall") in pending.ops
 
 
-def test_non_object_source_and_dest_values_are_plain_properties():
+def test_non_object_source_and_dest_values_use_endpoint_compare_and_set():
     r = refs(hall=200)
     want = room(props=[
         PropDef("source", "a new book", defined=False),
@@ -290,12 +290,12 @@ def test_non_object_source_and_dest_values_are_plain_properties():
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("setprop", Ref("@", "hall"), "source", "a new book"),
-        ("setprop", Ref("@", "hall"), "dest", ["b"]),
+        ("endpoint", Ref("@", "hall"), "source", "an old book", "a new book"),
+        ("endpoint", Ref("@", "hall"), "dest", ["a"], ["b"]),
     ]
 
 
-def test_endpoint_change_with_a_non_object_on_either_side_is_a_plain_setprop():
+def test_endpoint_change_with_a_non_object_on_either_side_still_reconciles_exits():
     r = refs(hall=200, old_source=201, new_dest=202)
     want = room(props=[
         PropDef("source", "not a room", defined=False),
@@ -307,8 +307,8 @@ def test_endpoint_change_with_a_non_object_on_either_side_is_a_plain_setprop():
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("setprop", Ref("@", "hall"), "source", "not a room"),
-        ("setprop", Ref("@", "hall"), "dest", Obj(202)),
+        ("endpoint", Ref("@", "hall"), "source", Obj(201), "not a room"),
+        ("endpoint", Ref("@", "hall"), "dest", "not a room", Obj(202)),
     ]
 
 

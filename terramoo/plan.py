@@ -221,9 +221,8 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
             ops.append(("unlink", target, relation, old))
 
     def reconcile_endpoint(prop: PropDef, prop_name: str, value) -> bool:
-        relation = prop.name.lower() in ("source", "dest")
-        old = refs.resolve(prop.value, live=True) if relation else None
-        if isinstance(old, (Obj, Ref)) and isinstance(value, (Obj, Ref)):
+        if prop.name.lower() in ("source", "dest"):
+            old = refs.resolve(prop.value, live=True)
             ops.append(("endpoint", target, prop_name, old, value))
             return True
         return False

@@ -128,3 +128,129 @@ quit
         assert ops[0][:2] == [0, "E_INVARG"]
     else:
         assert ops[0] == [1, 1]
+
+
+def _run_helper_script(offline_moo, tmp_path, body):
+    binary, database = offline_moo
+    helper = (ROOT / "terramoo/helper/tmoo_apply.moo").read_text().splitlines()
+    script = f""";;
+tool = create(#-1);
+add_property(tool, "registry", {{{{}}, {{}}, {{}}}}, {{#2, ""}});
+add_verb(tool, {{#2, "xd", "tmoo_apply"}}, {{"this", "none", "this"}});
+errors = set_verb_code(tool, "tmoo_apply", {serialize(helper)});
+if (errors) raise(E_INVARG, toliteral(errors)); endif
+{body}
+.
+quit
+"""
+    result = subprocess.run(
+        [str(binary), "-e", str(database), str(tmp_path / "out.db")],
+        input=script, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
+    assert reply, result.stdout
+    return parse(reply[1])
+
+
+def test_endpoint_refusal_restores_property_and_old_room_membership(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+old = create(#-1);
+new = create(#-1);
+door = create($exit);
+add_property(old, "exits", {door}, {#2, "rw"});
+add_property(new, "exits", {}, {#2, "rw"});
+add_verb(old, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(old, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+add_verb(old, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(old, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(new, "add_exit", {"return 0;"});
+add_verb(new, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(new, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+door.source = old;
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+tool.registry = {{"door"}, {door}, {"door-generation"}};
+result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new}});
+return {result, door.source == old, door in old.exits, door in new.exits};
+""")
+    assert result[0][0][:2] == [0, "E_INVARG"]
+    assert result[1:] == [1, 1, 0]
+
+
+def test_endpoint_remove_failure_compensates_every_completed_step(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+old = create(#-1);
+new = create(#-1);
+door = create($exit);
+add_property(old, "exits", {door}, {#2, "rw"});
+add_property(new, "exits", {}, {#2, "rw"});
+add_verb(old, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(old, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 0;"});
+add_verb(old, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(old, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(new, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(new, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+door.source = old;
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+tool.registry = {{"door"}, {door}, {"door-generation"}};
+result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new}});
+return {result, door.source == old, door in old.exits, door in new.exits};
+""")
+    assert result[0][0][:2] == [0, "E_INVARG"]
+    assert result[1:] == [1, 1, 0]
+
+
+def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+old = create(#-1);
+new = create(#-1);
+thing = create(#-1);
+add_property(old, "exits", {thing}, {#2, "rw"});
+add_property(new, "exits", {}, {#2, "rw"});
+add_verb(old, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(old, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(new, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_property(thing, "source", old, {#2, "rw"});
+add_property(thing, "_terramoo_generation", "thing-generation", {#2, "r"});
+tool.registry = {{"thing"}, {thing}, {"thing-generation"}};
+result = tool:tmoo_apply({{"endpoint", "thing", thing, "thing-generation", "source", old, new}});
+return {result, thing.source == new, thing in old.exits, thing in new.exits};
+""")
+    assert result == [[[1, 1]], 1, 1, 0]
+
+
+def test_unlink_on_non_exit_does_not_call_room_callbacks(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+room = create(#-1);
+thing = create(#-1);
+add_property(room, "exits", {thing}, {#2, "rw"});
+add_verb(room, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(room, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+add_property(thing, "_terramoo_generation", "thing-generation", {#2, "r"});
+tool.registry = {{"thing"}, {thing}, {"thing-generation"}};
+result = tool:tmoo_apply({{"unlink", "thing", thing, "thing-generation", "exit", room}});
+return {result, thing in room.exits};
+""")
+    assert result == [[[1, 1]], 1]
+
+
+def test_exit_endpoint_to_scalar_removes_old_membership(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+old = create(#-1);
+door = create($exit);
+add_property(old, "exits", {door}, {#2, "rw"});
+add_verb(old, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(old, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+add_verb(old, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(old, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+door.source = old;
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+tool.registry = {{"door"}, {door}, {"door-generation"}};
+result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, "nowhere"}});
+return {result, door.source, door in old.exits};
+""")
+    assert result == [[[1, 1]], "nowhere", 0]

@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -6,8 +7,8 @@ from terramoo import cli, moolit, objdef
 from terramoo.apply import Outcome
 from terramoo.cli import parse_object_arg
 from terramoo.errors import MooError
-from terramoo.model import ObjectDef, PropDef
-from terramoo.moolit import Obj, Ref
+from terramoo.model import ObjectDef, PropDef, VerbDef
+from terramoo.moolit import Map, Obj, Ref
 from terramoo.plan import Plan
 from terramoo.refs import Refs
 from terramoo.world import World, registry_value
@@ -164,81 +165,159 @@ def test_status_reports_each_legacy_registry_key_with_rename_command(monkeypatch
 
 
 def test_rename_key_atomically_moves_a_legacy_binding(tmp_path, monkeypatch):
-    class RenameWorld:
-        def __init__(self):
-            self.raw_registry = [["bad-key"], [Obj(10)], ["generation-10"]]
-            self.objects_dir = tmp_path
-            self.transport = SimpleNamespace(serialize=moolit.serialize)
-            self.sent = []
-            self.saved = []
-
-        def refs(self):
-            return Refs(player=Obj(1), registry=registry_value(self.raw_registry))
-
-        def require_helper_version(self):
-            pass
-
-        def helper(self, verb, arg):
-            return verb, arg
-
-        def eval(self, call):
-            self.sent.append(call)
-            op = moolit.parse(call[1])[0]
-            _, old, expected, nonce, new = op
-            assert [old, expected, nonce] == ["bad-key", Obj(10), "generation-10"]
-            self.raw_registry[0][0] = new
-            return [[1, Obj(10)]]
-
-        def read_registry(self):
-            return registry_value(self.raw_registry)
-
-        def save_state(self, registry):
-            self.saved.append(dict(registry))
-
-        def file_for(self, key):
-            assert key == "good_key"
-            return self.objects_dir / f"{key}.moo"
-
-    world = RenameWorld()
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch, old="bad-key")
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
     cli.cmd_rename_key(SimpleNamespace(old="bad-key", new="good_key"))
 
-    assert moolit.parse(world.sent[0][1]) == [
-        ["rename", "bad-key", Obj(10), "generation-10", "good_key"]
+    assert moolit.parse(sent[0]) == [
+        ["rename", 1, Obj(10), "generation-10", "good_key"]
     ]
-    assert world.raw_registry[0] == ["good_key"]
-    assert world.saved == [{"good_key": Obj(10)}]
+    assert raw_registry[0] == ["good_key"]
+    assert json.loads(world.state_path.read_text())["registry"] == {"good_key": 10}
 
 
 def test_rename_key_renames_an_existing_local_object_file(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert moolit.parse(sent[0]) == [
+        ["rename", 1, Obj(10), "generation-10", "new_key"]
+    ]
+    assert not world.file_for("old_key").exists()
+    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
+    assert json.loads(world.state_path.read_text())["registry"] == {"new_key": 10}
+
+
+def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False):
     world = World("test", tmp_path, "alice", {})
     world.objects_dir.mkdir(parents=True)
-    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
-    raw_registry = [["old_key"], [Obj(10)], ["generation-10"]]
-    saved = []
+    world._player = Obj(1)
+    world._toolbox = Obj(99)
     world._transport = SimpleNamespace(serialize=moolit.serialize)
+    raw_registry = [[old], [Obj(10)], ["generation-10"]]
+    sent = []
     monkeypatch.setattr(world, "refs", lambda: Refs(player=Obj(1), registry=registry_value(raw_registry)))
     monkeypatch.setattr(world, "require_helper_version", lambda: None)
     monkeypatch.setattr(world, "helper", lambda verb, arg: (verb, arg))
 
     def rename(call):
-        assert moolit.parse(call[1]) == [
-            ["rename", "old_key", Obj(10), "generation-10", "new_key"]
-        ]
-        raw_registry[0][0] = "new_key"
-        return [[1, Obj(10)]]
+        text = call[1]
+        sent.append(text)
+        op = moolit.parse(text)[0]
+        selector, expected, nonce, new = op[1:]
+        if isinstance(selector, int):
+            index = selector - 1
+        else:  # the pre-fix operation names the old key directly
+            index = next(i for i, key in enumerate(raw_registry[0]) if key.lower() == selector.lower())
+        if fail_reverse and len(sent) > 1:
+            return [[0, "E_PERM", "reverse refused"]]
+        assert raw_registry[1][index] == expected
+        assert raw_registry[2][index] == nonce
+        raw_registry[0][index] = new
+        return [[1, expected]]
 
     monkeypatch.setattr(world, "eval", rename)
     monkeypatch.setattr(world, "read_registry", lambda: registry_value(raw_registry))
-    monkeypatch.setattr(world, "save_state", lambda registry: saved.append(dict(registry)))
+    return world, raw_registry, sent
+
+
+def test_rename_key_rewrites_every_parsed_reference(tmp_path, monkeypatch):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    world.write_file(ObjectDef(
+        key="hall",
+        name="Hall",
+        parent=Ref("@", "OLD_KEY"),
+        location=Ref("@", "old_key"),
+        owner=Ref("@", "old_key"),
+        props=[
+            PropDef(
+                "links",
+                Map({Ref("@", "old_key"): [Ref("@", "OLD_KEY")]}),
+                owner=Ref("@", "old_key"),
+            ),
+        ],
+        verbs=[VerbDef("look", ["return 1;"], owner=Ref("@", "old_key"))],
+    ))
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
     cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
 
+    assert raw_registry[0] == ["new_key"]
     assert not world.file_for("old_key").exists()
-    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
-    assert saved == [{"new_key": Obj(10)}]
+    renamed = objdef.parse(world.file_for("new_key").read_text())
+    hall = objdef.parse(world.file_for("hall").read_text())
+    assert renamed.key == "new_key"
+    assert hall.parent == Ref("@", "new_key")
+    assert hall.location == Ref("@", "new_key")
+    assert hall.owner == Ref("@", "new_key")
+    assert hall.props[0].owner == Ref("@", "new_key")
+    assert hall.props[0].value == Map({Ref("@", "new_key"): [Ref("@", "new_key")]})
+    assert hall.verbs[0].owner == Ref("@", "new_key")
+
+
+def test_rename_key_reverses_remote_change_when_local_finalization_fails(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    world.state_path.write_text("old state\n")
+    original_replace = type(world.state_path).replace
+
+    def fail_state_replace(path, target):
+        if target == world.state_path and ".new." in path.name:
+            raise OSError("disk full")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(type(world.state_path), "replace", fail_state_replace)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="local rename failed.*remote rename was reversed"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert len(sent) == 2
+    assert raw_registry[0] == ["old_key"]
+    assert world.file_for("old_key").exists()
+    assert not world.file_for("new_key").exists()
+    assert world.state_path.read_text() == "old state\n"
+
+
+def test_rename_key_journals_a_failed_remote_reverse(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch, fail_reverse=True)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    original_replace = type(world.state_path).replace
+
+    def fail_state_replace(path, target):
+        if target == world.state_path:
+            raise OSError("disk full")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(type(world.state_path), "replace", fail_state_replace)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="recovery journal"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    journal = world.state_path.with_name("state.json.rename-recovery.json")
+    assert len(sent) == 2
+    assert raw_registry[0] == ["new_key"]
+    assert journal.exists()
+    assert "tmoo rename-key new_key old_key" in journal.read_text()
+
+
+def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch, old="مرحبا")
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="مرحبا", new="hello"))
+
+    assert raw_registry[0] == ["hello"]
+    assert sent[0].isascii()
+    assert moolit.parse(sent[0]) == [
+        ["rename", 1, Obj(10), "generation-10", "hello"],
+    ]
 
 
 def test_pull_skips_legacy_keys_without_building_a_file_path(monkeypatch, capsys):

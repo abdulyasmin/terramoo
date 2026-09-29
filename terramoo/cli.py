@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import difflib
 import getpass
+import json
+import os
+import shlex
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -15,7 +18,8 @@ from . import moolit, objdef
 from . import plan as plan_mod
 from .errors import MooError
 from .model import ordered_like
-from .moolit import Obj
+from .moolit import Obj, Ref, walk
+from .refs import Registry, save_state as write_state
 from .secrets import check_secret, store_secret
 from .world import World, find_root, validate_key
 
@@ -265,8 +269,82 @@ def cmd_adopt(args):
         raise MooError(f"adoption failed: {'; '.join(problems)}")
 
 
+def _rewrite_object_refs(obj, old: str, new: str) -> bool:
+    """Rewrite parsed @refs only; verb code and arbitrary text stay untouched."""
+    changed = False
+
+    def rename(value):
+        nonlocal changed
+        if isinstance(value, Ref) and value.kind == "@" and value.name.lower() == old.lower():
+            changed = True
+            return Ref("@", new)
+        return value
+
+    obj.parent = walk(obj.parent, rename)
+    obj.location = walk(obj.location, rename)
+    obj.owner = walk(obj.owner, rename)
+    for prop in obj.props:
+        prop.value = walk(prop.value, rename)
+        prop.owner = walk(prop.owner, rename)
+    for verb in obj.verbs:
+        verb.owner = walk(verb.owner, rename)
+    return changed
+
+
+def _temp_for(path: Path, label: str) -> Path:
+    return path.with_name(f".{path.name}.{label}.{uuid4().hex}.tmp")
+
+
+def _write_fsynced(path: Path, data: str | bytes) -> None:
+    mode = "xb" if isinstance(data, bytes) else "x"
+    kwargs = {} if isinstance(data, bytes) else {"encoding": "utf-8"}
+    with path.open(mode, **kwargs) as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _fsync_dir(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rename_result(w: World, index: int, obj: Obj, nonce: str, new: str):
+    op = ["rename", index, obj, nonce, new]
+    results = w.eval(w.helper("tmoo_apply", w.transport.serialize([op])))
+    if (
+        isinstance(results, list)
+        and len(results) == 1
+        and isinstance(results[0], list)
+        and len(results[0]) == 2
+        and results[0][0] == 1
+        and results[0][1] == obj
+    ):
+        return
+    if (
+        isinstance(results, list)
+        and len(results) == 1
+        and isinstance(results[0], list)
+        and len(results[0]) >= 3
+        and results[0][0] == 0
+    ):
+        raise MooError(f"rename failed: {results[0][1]}: {results[0][2]}")
+    raise MooError(f"rename failed: malformed helper result: {results!r}")
+
+
+def _cleanup(paths) -> None:
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def cmd_rename_key(args):
-    """Atomically rename one registry binding, then its local file if any."""
+    """Prepare local migration, CAS-rename the registry, then finalize files."""
     w = _world(args)
     refs = w.refs()
     old = refs.registry_key(args.old)
@@ -276,78 +354,182 @@ def cmd_rename_key(args):
     occupied = refs.registry_key(new)
     if occupied is not None and occupied != old:
         raise MooError(f"{new} is already {refs.registry[occupied]}")
-
-    source = next(
-        (path for path in w.objects_dir.glob("*.moo") if path.stem.lower() == old.lower()),
-        None,
-    )
-    destination = w.file_for(new) if source is not None else None
-    rendered = None
-    same_path = False
-    if source is not None:
-        if destination.exists():
-            try:
-                same_path = source.samefile(destination)
-            except OSError:
-                same_path = False
-            if not same_path:
-                raise MooError(f"cannot rename {source.name}: {destination.name} already exists")
-        try:
-            local = objdef.parse(source.read_text())
-        except ValueError as e:
-            raise MooError(f"cannot rename {source.name}: {e}") from None
-        local.key = new
-        rendered = objdef.render(local)
-
-    w.require_helper_version()
     obj = refs.registry[old]
     nonce = refs.generation_for(old) or ""
-    op = ["rename", old, obj, nonce, new]
-    results = w.eval(w.helper("tmoo_apply", w.transport.serialize([op])))
-    if not (
-        isinstance(results, list)
-        and len(results) == 1
-        and isinstance(results[0], list)
-        and len(results[0]) == 2
-        and results[0][0] == 1
-        and results[0][1] == obj
-    ):
-        if (
-            isinstance(results, list)
-            and len(results) == 1
-            and isinstance(results[0], list)
-            and len(results[0]) >= 3
-            and results[0][0] == 0
-        ):
-            raise MooError(f"rename failed: {results[0][1]}: {results[0][2]}")
-        raise MooError(f"rename failed: malformed helper result: {results!r}")
+    index = list(refs.registry).index(old) + 1
 
-    updated = w.read_registry()
-    actual = next(
-        (
-            key for key, value in updated.items()
-            if key.lower() == new.lower()
-            and value == obj
-            and updated.generations.get(key) == (nonce or None)
-        ),
-        None,
-    )
-    if actual is None:
-        raise MooError(f"rename returned success, but {new!r} is absent from the registry")
-    refs.replace_registry(updated)
-    w.save_state(refs.snapshot())
+    changes = []
+    try:
+        files = w.load_files()
+        source_key = next((key for key in files if key.lower() == old.lower()), None)
+        for key, local in files.items():
+            source = w.file_for(key)
+            refs_changed = _rewrite_object_refs(local, old, new)
+            destination = source
+            if key == source_key:
+                local.key = new
+                destination = w.file_for(new)
+            if not refs_changed and key != source_key:
+                continue
+            same_path = source == destination
+            if destination.exists() and not same_path:
+                try:
+                    same_path = source.samefile(destination)
+                except OSError:
+                    same_path = False
+                if not same_path:
+                    raise MooError(
+                        f"cannot rename {source.name}: {destination.name} already exists"
+                    )
+            changes.append((source, destination, same_path, objdef.render(local)))
+    except (OSError, ValueError) as e:
+        raise MooError(f"cannot prepare rename {old!r} to {new!r}: {e}") from None
 
-    if source is not None and rendered is not None:
-        temp = w.objects_dir / f".{new}.{uuid4().hex}.tmp"
-        try:
-            temp.write_text(rendered)
-            temp.replace(destination)
-            if not same_path and source.exists():
+    updated_pairs = [(new if key == old else key, value) for key, value in refs.registry.items()]
+    updated_generations = {
+        new if key == old else key: refs.generations.get(key)
+        for key in refs.registry
+    }
+    expected_registry = Registry(updated_pairs, updated_generations)
+    prepared = []
+    temporary = []
+    state_temp = _temp_for(w.state_path, "new")
+    state_backup = _temp_for(w.state_path, "old") if w.state_path.exists() else None
+    try:
+        for source, destination, same_path, rendered in changes:
+            new_temp = _temp_for(destination, "new")
+            backup = _temp_for(source, "old")
+            temporary.extend((new_temp, backup))
+            _write_fsynced(new_temp, rendered)
+            _write_fsynced(backup, source.read_bytes())
+            prepared.append((source, destination, same_path, new_temp, backup))
+        write_state(state_temp, refs.player, expected_registry, w.toolbox)
+        with state_temp.open("rb") as stream:
+            os.fsync(stream.fileno())
+        temporary.append(state_temp)
+        if state_backup is not None:
+            _write_fsynced(state_backup, w.state_path.read_bytes())
+            temporary.append(state_backup)
+        _fsync_dir(w.objects_dir)
+        _fsync_dir(w.state_path.parent)
+    except OSError as e:
+        _cleanup(temporary + [state_temp] + ([state_backup] if state_backup else []))
+        raise MooError(f"cannot prepare rename {old!r} to {new!r}: {e}") from None
+
+    try:
+        w.require_helper_version()
+        _rename_result(w, index, obj, nonce, new)
+    except Exception:
+        _cleanup(temporary)
+        raise
+
+    finalization_error = None
+    try:
+        updated = w.read_registry()
+        actual = next(
+            (
+                key for key, value in updated.items()
+                if key.lower() == new.lower()
+                and value == obj
+                and updated.generations.get(key) == (nonce or None)
+            ),
+            None,
+        )
+        if actual is None:
+            raise MooError(f"rename returned success, but {new!r} is absent from the registry")
+        for source, destination, same_path, new_temp, _ in prepared:
+            new_temp.replace(destination)
+            if not same_path:
                 source.unlink()
-        finally:
-            if temp.exists():
-                temp.unlink()
-    print(f"renamed {old} to {actual} ({obj})")
+            _fsync_dir(destination.parent)
+        state_temp.replace(w.state_path)
+        _fsync_dir(w.state_path.parent)
+    except (OSError, MooError) as e:
+        finalization_error = e
+
+    if finalization_error is None:
+        refs.replace_registry(updated)
+        _cleanup(temporary)
+        print(f"renamed {old} to {actual} ({obj})")
+        return
+
+    reverse_error = None
+    try:
+        _rename_result(w, index, obj, nonce, old)
+        restored = w.read_registry()
+        restored_key = next(
+            (
+                key for key, value in restored.items()
+                if key.lower() == old.lower()
+                and value == obj
+                and restored.generations.get(key) == (nonce or None)
+            ),
+            None,
+        )
+        if restored_key is None:
+            raise MooError(f"reverse rename returned success, but {old!r} is absent")
+    except Exception as e:
+        reverse_error = e
+
+    rollback_errors = []
+    for source, destination, same_path, _, backup in reversed(prepared):
+        try:
+            backup.replace(source)
+            if not same_path:
+                destination.unlink(missing_ok=True)
+            _fsync_dir(source.parent)
+        except OSError as e:
+            rollback_errors.append(f"{source.name}: {e}")
+    try:
+        if state_backup is None:
+            w.state_path.unlink(missing_ok=True)
+        else:
+            state_backup.replace(w.state_path)
+        _fsync_dir(w.state_path.parent)
+    except OSError as e:
+        rollback_errors.append(f"{w.state_path.name}: {e}")
+
+    if reverse_error is None and not rollback_errors:
+        _cleanup(temporary)
+        raise MooError(
+            f"local rename failed ({finalization_error}); the remote rename was reversed"
+        ) from None
+
+    journal = w.state_path.with_name("state.json.rename-recovery.json")
+    if reverse_error is None:
+        commands = [f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}"]
+    elif objdef.is_identifier(old):
+        commands = [
+            f"tmoo rename-key {shlex.quote(new)} {shlex.quote(old)}",
+            f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}",
+        ]
+    else:
+        commands = [f"tmoo rename-key {shlex.quote(new)} {shlex.quote(new)}"]
+    record = {
+        "old_key": old,
+        "new_key": new,
+        "object": str(obj),
+        "generation": nonce,
+        "local_error": str(finalization_error),
+        "reverse_error": str(reverse_error) if reverse_error is not None else None,
+        "rollback_errors": rollback_errors,
+        "preserved_temporary_files": [str(path) for path in temporary if path.exists()],
+        "recovery_commands": commands,
+    }
+    try:
+        journal_temp = _temp_for(journal, "new")
+        _write_fsynced(journal_temp, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
+        journal_temp.replace(journal)
+        _fsync_dir(journal.parent)
+    except OSError as e:
+        raise MooError(
+            f"local rename failed ({finalization_error}); recovery was incomplete; "
+            f"could not write recovery journal: {e}"
+        ) from None
+    raise MooError(
+        f"local rename failed ({finalization_error}); recovery was incomplete; "
+        f"recovery journal: {journal}; run: {'; then '.join(commands)}"
+    ) from None
 
 
 def parse_object_arg(text: str) -> Obj:

@@ -103,14 +103,14 @@ for op in (ops)
       endif
       this.registry = reg;
     elseif (kind == "rename")
-      old_key = op[2];
+      i = op[2];
       o = op[3];
       nonce = op[4];
       new_key = op[5];
-      i = old_key in reg[1];
-      if (!i || reg[2][i] != o || reg[3][i] != nonce)
-        raise(E_INVARG, tostr("key ", old_key, " changed before rename"));
+      if (typeof(i) != typeof(0) || i < 1 || i > length(reg[1]) || reg[2][i] != o || reg[3][i] != nonce)
+        raise(E_INVARG, "registry binding changed before rename");
       endif
+      old_key = reg[1][i];
       if (nonce && valid(o) && (!("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce))
         raise(E_INVARG, tostr("key ", old_key, " names a different object generation"));
       endif
@@ -235,53 +235,161 @@ for op in (ops)
         prop = op[5];
         expected = op[6];
         new = op[7];
-        if ((prop != "source" && prop != "dest") || typeof(expected) != typeof(#0) || typeof(new) != typeof(#0))
-          raise(E_INVARG, "endpoint needs source or dest and two object values");
+        if (prop != "source" && prop != "dest")
+          raise(E_INVARG, "endpoint needs source or dest");
         endif
         current = o.(prop);
         if (current != expected)
           raise(E_INVARG, tostr(prop, " changed before endpoint update; replan"));
         endif
-        if (valid(expected) && prop == "source" && o in `expected.exits ! ANY => {}')
-          expected:remove_exit(o);
-          if (o in `expected.exits ! ANY => {}')
-            raise(E_INVARG, tostr("exit ", o, " remains in ", expected, ".exits"));
-          endif
-        elseif (valid(expected) && prop == "dest" && o in `expected.entrances ! ANY => {}')
-          expected:remove_entrance(o);
-          if (o in `expected.entrances ! ANY => {}')
-            raise(E_INVARG, tostr("exit ", o, " remains in ", expected, ".entrances"));
-          endif
-        endif
-        o.(prop) = new;
-        if (valid(new) && prop == "source" && !(o in `new.exits ! ANY => {}'))
-          new:add_exit(o);
-          if (!(o in `new.exits ! ANY => {}'))
-            raise(E_INVARG, tostr("exit ", o, " was not added to ", new, ".exits"));
-          endif
-        elseif (valid(new) && prop == "dest" && !(o in `new.entrances ! ANY => {}'))
-          new:add_entrance(o);
-          if (!(o in `new.entrances ! ANY => {}'))
-            raise(E_INVARG, tostr("exit ", o, " was not added to ", new, ".entrances"));
-          endif
+        exit_class = `$exit ! ANY => #-1';
+        is_exit = 0;
+        a = valid(o) && valid(exit_class) ? o | #-1;
+        while (valid(a) && !is_exit)
+          is_exit = a == exit_class;
+          a = parent(a);
+        endwhile
+        if (!is_exit)
+          "An ordinary source/dest property is only a compare-and-set update.";
+          o.(prop) = new;
+        else
+          new_room = typeof(new) == typeof(#0) ? new | #-1;
+          old_room = typeof(expected) == typeof(#0) ? expected | #-1;
+          added_new = 0;
+          adding_new = 0;
+          changed_prop = 0;
+          removed_old = 0;
+          removing_old = 0;
+          try
+            "Add first: refusal cannot strand the exit after its endpoint changed.";
+            if (valid(new_room) && new_room != old_room)
+              if (prop == "source" && !(o in `new_room.exits ! ANY => {}'))
+                adding_new = 1;
+                callback_result = new_room:add_exit(o);
+                added_new = o in `new_room.exits ! ANY => {}';
+                if (!callback_result || !added_new)
+                  raise(E_INVARG, tostr("exit ", o, " was not added to ", new_room, ".exits"));
+                endif
+              elseif (prop == "dest" && !(o in `new_room.entrances ! ANY => {}'))
+                adding_new = 1;
+                callback_result = new_room:add_entrance(o);
+                added_new = o in `new_room.entrances ! ANY => {}';
+                if (!callback_result || !added_new)
+                  raise(E_INVARG, tostr("exit ", o, " was not added to ", new_room, ".entrances"));
+                endif
+              endif
+              "The callback may have suspended: recheck identity and the CAS value.";
+              reg = this.registry;
+              i = key in reg[1];
+              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+                raise(E_INVARG, tostr("key ", key, " changed during endpoint update"));
+              endif
+              if (o.(prop) != expected)
+                raise(E_INVARG, tostr(prop, " changed during endpoint update; replan"));
+              endif
+            endif
+            o.(prop) = new;
+            changed_prop = 1;
+            if (valid(old_room) && old_room != new_room)
+              if (prop == "source" && o in `old_room.exits ! ANY => {}')
+                removing_old = 1;
+                callback_result = old_room:remove_exit(o);
+                removed_old = !(o in `old_room.exits ! ANY => {}');
+                if (!callback_result || !removed_old)
+                  raise(E_INVARG, tostr("exit ", o, " remains in ", old_room, ".exits"));
+                endif
+              elseif (prop == "dest" && o in `old_room.entrances ! ANY => {}')
+                removing_old = 1;
+                callback_result = old_room:remove_entrance(o);
+                removed_old = !(o in `old_room.entrances ! ANY => {}');
+                if (!callback_result || !removed_old)
+                  raise(E_INVARG, tostr("exit ", o, " remains in ", old_room, ".entrances"));
+                endif
+              endif
+              "The callback may have suspended: recheck identity and the new value.";
+              reg = this.registry;
+              i = key in reg[1];
+              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+                raise(E_INVARG, tostr("key ", key, " changed during endpoint update"));
+              endif
+              if (o.(prop) != new)
+                raise(E_INVARG, tostr(prop, " changed during endpoint update; replan"));
+              endif
+            endif
+          except endpoint_error (ANY)
+            rollback = "";
+            if (adding_new && !added_new)
+              added_new = prop == "source" ? o in `new_room.exits ! ANY => {}' | o in `new_room.entrances ! ANY => {}';
+            endif
+            if (removing_old && !removed_old)
+              removed_old = prop == "source" ? !(o in `old_room.exits ! ANY => {}') | !(o in `old_room.entrances ! ANY => {}');
+            endif
+            if (removed_old)
+              if (prop == "source")
+                callback_result = `old_room:add_exit(o) ! ANY => 0';
+                if (!callback_result || !(o in `old_room.exits ! ANY => {}'))
+                  rollback = tostr(rollback, " could not restore old exits membership;");
+                endif
+              else
+                callback_result = `old_room:add_entrance(o) ! ANY => 0';
+                if (!callback_result || !(o in `old_room.entrances ! ANY => {}'))
+                  rollback = tostr(rollback, " could not restore old entrances membership;");
+                endif
+              endif
+            endif
+            if (changed_prop && o.(prop) == new)
+              try
+                o.(prop) = expected;
+              except rollback_error (ANY)
+                rollback = tostr(rollback, " could not restore ", prop, ";");
+              endtry
+            elseif (changed_prop && o.(prop) != expected)
+              rollback = tostr(rollback, " ", prop, " changed again before rollback;");
+            endif
+            if (added_new)
+              if (prop == "source")
+                callback_result = `new_room:remove_exit(o) ! ANY => 0';
+                if (!callback_result || o in `new_room.exits ! ANY => {}')
+                  rollback = tostr(rollback, " could not remove new exits membership;");
+                endif
+              else
+                callback_result = `new_room:remove_entrance(o) ! ANY => 0';
+                if (!callback_result || o in `new_room.entrances ! ANY => {}')
+                  rollback = tostr(rollback, " could not remove new entrances membership;");
+                endif
+              endif
+            endif
+            if (rollback)
+              raise(E_INVARG, tostr(endpoint_error[2], "; rollback failed:", rollback));
+            endif
+            raise(endpoint_error[1], endpoint_error[2]);
+          endtry
         endif
       elseif (kind == "clearprop")
         clear_property(o, op[5]);
       elseif (kind == "unlink")
         relation = op[5];
         room = typeof(op[6]) == typeof(#0) ? op[6] | #-1;
-        if (valid(room) && relation == "exit" && o in `room.exits ! ANY => {}')
+        if (relation != "exit" && relation != "entrance")
+          raise(E_INVARG, tostr("unknown unlink relation ", relation));
+        endif
+        exit_class = `$exit ! ANY => #-1';
+        is_exit = 0;
+        a = valid(o) && valid(exit_class) ? o | #-1;
+        while (valid(a) && !is_exit)
+          is_exit = a == exit_class;
+          a = parent(a);
+        endwhile
+        if (is_exit && valid(room) && relation == "exit" && o in `room.exits ! ANY => {}')
           room:remove_exit(o);
           if (o in `room.exits ! ANY => {}')
             raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".exits"));
           endif
-        elseif (valid(room) && relation == "entrance" && o in `room.entrances ! ANY => {}')
+        elseif (is_exit && valid(room) && relation == "entrance" && o in `room.entrances ! ANY => {}')
           room:remove_entrance(o);
           if (o in `room.entrances ! ANY => {}')
             raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".entrances"));
           endif
-        elseif (relation != "exit" && relation != "entrance")
-          raise(E_INVARG, tostr("unknown unlink relation ", relation));
         endif
       elseif (kind == "addverb" || kind == "verbcode")
         if (kind == "addverb")

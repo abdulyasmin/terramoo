@@ -332,6 +332,8 @@ def test_moor_escaped_nested_export_record_uses_moor_dialect(monkeypatch):
 def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, value):
     literal = moolit.serialize(value, dialect=moolit.MOOR)
     assert literal.isascii()
+    if value == "before😀after":
+        assert literal == 'urldecode("before%F0%9F%98%80after")'
     answer_literal = moolit.escape(value, dialect=moolit.MOOR, raw_unicode=True)
 
     def reply(tag, line):
@@ -349,6 +351,8 @@ def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, 
     assert t.literal_dialect == moolit.MOOR
 
     assert t.eval(t.serialize(value)) == value
+    if value == "before😀after":
+        assert any(f"_r = ({literal})" in line for line in fake.received)
     assert all(line.isascii() and all(0x20 <= ord(char) <= 0x7E for char in line) for line in fake.received)
 
 
