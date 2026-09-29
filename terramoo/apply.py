@@ -124,8 +124,8 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
     if destroy and plan.destroys:
         log("recycling:")
         ops, labels = [], []
-        for key in plan.destroys:
-            o = refs.registry[key]
+        # Callbacks may have rebound orphan keys since the plan was built.
+        for key, o in plan.destroys.items():
             ops.append(["destroy", key, o])
             labels.append(f"recycle {key} ({o})")
         _send(world, ops, labels, outcome, log)

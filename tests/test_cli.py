@@ -70,7 +70,7 @@ def test_apply_confirmation_refusal_sends_nothing(monkeypatch, capsys):
 def test_confirmed_apply_forwards_the_destroy_flag(monkeypatch, capsys):
     world = SimpleNamespace()
     refs = Refs(player=Obj(1), registry={"hall": Obj(2)})
-    pending = Plan(ops=[("name", Ref("@", "hall"), "Great Hall")], destroys=["old"])
+    pending = Plan(ops=[("name", Ref("@", "hall"), "Great Hall")], destroys={"old": Obj(3)})
     seen = {}
     monkeypatch.setattr(cli, "_world", lambda args: world)
     monkeypatch.setattr(cli, "_plan", lambda w: (refs, {"hall": object()}, pending))
@@ -91,7 +91,7 @@ def test_apply_problems_abort_before_confirmation_or_mutation(monkeypatch, capsy
     world = SimpleNamespace(save_state=lambda registry: pytest.fail("state was saved"))
     refs = Refs(player=Obj(1), registry={"hall": Obj(2)})
     unsafe = Plan(
-        destroys=["old"],
+        destroys={"old": Obj(3)},
         problems=["hall: refers to @missing, which has no file"],
     )
     monkeypatch.setattr(cli, "_world", lambda args: world)

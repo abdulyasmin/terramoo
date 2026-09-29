@@ -104,7 +104,7 @@ def test_orphans_and_problems():
     r = refs(hall=200, attic=201)
     files = {"hall": room(parent=Ref("$", "castle"))}
     p = plan.build(files, {"hall": room()}, r)
-    assert p.destroys == ["attic"]
+    assert p.destroys == {"attic": Obj(201)}
     assert p.problems and "castle" in p.problems[0]
     assert p.creates == []
 
@@ -130,7 +130,7 @@ def test_reference_to_a_key_with_no_file_is_a_problem():
     p = plan.build(files, {"hall": room()}, r)
     assert p.problems == ["hall: refers to @door, which has no file"]
     assert not p.creates and not p.ops
-    assert p.destroys == ["door"]
+    assert p.destroys == {"door": Obj(201)}
 
 
 def test_reference_to_a_recreated_object_waits_for_its_new_number():

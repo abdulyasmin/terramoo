@@ -21,7 +21,7 @@ class Plan:
     creates: list[tuple[str, object, str]] = field(default_factory=list)  # (key, parent, name)
     gone: dict[str, Obj] = field(default_factory=dict)  # registry entries the MOO no longer has
     ops: list[tuple] = field(default_factory=list)
-    destroys: list[str] = field(default_factory=list)  # registry keys with no file
+    destroys: dict[str, Obj] = field(default_factory=dict)  # orphan bindings at planning time
     problems: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
 
@@ -92,7 +92,7 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
 
     for key in refs.registry:
         if key not in files:
-            plan.destroys.append(key)
+            plan.destroys[key] = refs.registry[key]
     if plan.ops or plan.creates:
         plan.ops.append(("link", [Ref("@", k) for k in files]))
     return plan

@@ -9,6 +9,7 @@ from terramoo.errors import MooError
 from terramoo.model import ObjectDef, PropDef
 from terramoo.moolit import Obj, Ref
 from terramoo.refs import Refs
+from terramoo.world import registry_value
 
 ME = Obj(130)
 
@@ -98,7 +99,7 @@ def test_a_failed_create_skips_only_the_ops_that_need_it():
 
 def test_orphans_are_only_recycled_when_destroy_is_explicit():
     old = Obj(201)
-    p = plan.Plan(destroys=["old"])
+    p = plan.Plan(destroys={"old": old})
 
     kept = FakeWorld()
     kept.registry = {"old": old}
@@ -134,7 +135,7 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
 
     outcome = apply.run(
         w,
-        plan.Plan(destroys=["blocked", "removable"]),
+        plan.Plan(destroys={"blocked": blocked, "removable": removable}),
         refs,
         files={},
         destroy=True,
@@ -148,6 +149,51 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
     assert outcome.failed == [("recycle blocked (#201)", "E_PERM: recycle refused")]
     assert refs.registry == {"blocked": blocked}
     assert w.saved == {"blocked": blocked}
+
+
+def test_destroy_refuses_orphan_rebound_by_initialize_callback():
+    old, child = Obj(100), Obj(200)
+    recycled = []
+
+    class RebindingWorld(FakeWorld):
+        def _op(self, op):
+            if op[0] == "create":
+                self.sent.append(op)
+                # initialize unregisters the orphan and registers the new object.
+                self.registry.pop("auto_child")
+                self.registry["auto_child"] = child
+                return [0, "E_INVARG", "object #200 is already registered as auto_child; cannot bind key child"]
+            if op[0] == "destroy":
+                self.sent.append(op)
+                key, expected = op[1:]
+                current = self.registry.get(key)
+                if current is not None:
+                    if current != expected:
+                        return [0, "E_INVARG", f"key {key} is now registered as {current}"]
+                    recycled.append(current)
+                    del self.registry[key]
+                return [1, 1]
+            return super()._op(op)
+
+        def read_registry(self):
+            return registry_value([list(self.registry), list(self.registry.values())])
+
+    w = RebindingWorld()
+    w.registry = {"auto_child": old}
+    refs = Refs(player=ME, registry=w.read_registry())
+    files = {"child": ObjectDef(key="child", name="Child", parent=Obj(5))}
+    pending = plan.build(files, {}, refs)
+    assert not pending.problems
+
+    outcome = apply.run(w, pending, refs, files=files, destroy=True, log=lambda _: None)
+
+    assert recycled == []
+    assert ["destroy", "auto_child", old] in w.sent
+    assert outcome.failed == [
+        ("create child (Child)", "E_INVARG: object #200 is already registered as auto_child; cannot bind key child"),
+        ("recycle auto_child (#100)", "E_INVARG: key auto_child is now registered as #200"),
+    ]
+    assert refs.registry == w.registry == w.saved == {"auto_child": child}
 
 
 def test_destroy_recovers_an_already_recycled_orphan_in_one_helper_call():
