@@ -69,7 +69,8 @@ def answer(value_literal, chunk=4, noise=()):
 
 def client(monkeypatch, fake, **kw):
     monkeypatch.setattr(socket, "create_connection", lambda address, timeout: fake.client)
-    return Telnet("local", 0, "alice", "pw", timeout=3, connect_timeout=3, **kw)
+    options = {"timeout": 3, "connect_timeout": 3, **kw}
+    return Telnet("local", 0, "alice", "pw", **options)
 
 
 def test_value_is_reassembled_from_chunks_amid_noise(monkeypatch):
@@ -141,6 +142,51 @@ def test_wire_strips_and_refuses_telnet_negotiation():
     wire._feed(b"ld " + bytes([IAC, IAC]) + b"\r\n")
     assert list(wire.lines) == ["hello", "world \udcff"]
     assert b.recv(16) == bytes([IAC, 254, 70])  # DONT 70
+
+
+def test_wire_closed_drains_complete_lines_before_reporting_eof():
+    a, b = socket.socketpair()
+    wire = _Wire(a)
+    b.sendall(b"last notice\r\n")
+    b.shutdown(socket.SHUT_WR)
+
+    assert wire.closed() is True
+    assert list(wire.lines) == ["last notice"]
+
+
+def test_connection_close_mid_request_is_reported_without_retry(monkeypatch):
+    fake = None
+
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        if "_r = (player)" in line:
+            return [tag + "S", tag + "B2", tag + "C1", tag + "D#1", tag + "E"]
+        fake.srv.shutdown(socket.SHUT_RDWR)
+        fake.srv.close()
+        return []
+
+    fake = FakeMoo(reply)
+    t = client(monkeypatch, fake)
+
+    with pytest.raises(MooError, match="the MOO closed the connection"):
+        t.eval("potentially_destructive_call()")
+    assert sum("potentially_destructive_call()" in line for line in fake.received) == 1
+
+
+def test_completed_answer_survives_a_missing_sentinel(monkeypatch):
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return []
+        return [tag + "S", tag + "B2", tag + "C1", tag + "D#1", tag + "E"]
+
+    t = client(monkeypatch, FakeMoo(reply), timeout=0.02, connect_timeout=0.02)
+
+    assert t.eval("anything") == Obj(1)
 
 
 def test_declared_answer_length_must_match_the_received_chunks(monkeypatch):

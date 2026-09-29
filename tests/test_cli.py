@@ -88,6 +88,36 @@ def test_confirmed_apply_forwards_the_destroy_flag(monkeypatch, capsys):
     assert capsys.readouterr().out.endswith("applied 2 op(s)\n")
 
 
+def test_apply_problems_abort_before_confirmation_or_mutation(monkeypatch, capsys):
+    world = SimpleNamespace(save_state=lambda registry: pytest.fail("state was saved"))
+    refs = Refs(player=Obj(1), registry={"hall": Obj(2)})
+    unsafe = Plan(
+        destroys=["old"],
+        problems=["hall: refers to @missing, which has no file"],
+    )
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_plan", lambda w: (refs, {}, unsafe))
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked for confirmation"))
+    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran"))
+
+    with pytest.raises(MooError, match="fix the problems above first"):
+        cli.cmd_apply(SimpleNamespace(yes=True, destroy=True))
+
+    assert "! hall: refers to @missing, which has no file" in capsys.readouterr().out
+
+
+def test_pull_rejects_unknown_keys_before_export_or_state_write(monkeypatch):
+    world = SimpleNamespace(
+        refs=lambda: Refs(player=Obj(1), registry={"hall": Obj(2)}),
+        save_state=lambda registry: pytest.fail("state was saved"),
+    )
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda *args: pytest.fail("export ran"))
+
+    with pytest.raises(MooError, match="not in the registry: missing"):
+        cli.cmd_pull(SimpleNamespace(keys=["hall", "missing"]))
+
+
 def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch):
     world = SimpleNamespace(
         refs=lambda: registry_value([["hall", "Hall"], [Obj(10), Obj(11)]]),
