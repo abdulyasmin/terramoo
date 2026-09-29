@@ -82,6 +82,11 @@ def cmd_secret(args):
 
 def cmd_bootstrap(args):
     w = _world(args)
+    with _world_write_lock(w):
+        _bootstrap_locked(w)
+
+
+def _bootstrap_locked(w: World) -> None:
     tb = w.bootstrap()
     w.save_state(w.read_registry())
     print(f"toolbox {tb} ready; state written to {w.state_path.relative_to(w.root)}")
@@ -162,6 +167,11 @@ def _write_exports(w: World, refs, keys) -> int:
 
 def cmd_pull(args):
     w = _world(args)
+    with _world_write_lock(w):
+        _pull_locked(w, args)
+
+
+def _pull_locked(w: World, args) -> None:
     refs = w.refs()
     requested = args.keys or sorted(refs.registry)
     missing = [k for k in requested if refs.registry_key(k) is None]
@@ -175,6 +185,11 @@ def cmd_pull(args):
 
 def cmd_adopt(args):
     w = _world(args)
+    with _world_write_lock(w):
+        _adopt_locked(w, args)
+
+
+def _adopt_locked(w: World, args) -> None:
     refs = w.refs()
     new: list[tuple[str, Obj]] = []
     verify = getattr(args, "verify", False)
@@ -347,15 +362,20 @@ def _cleanup(paths) -> None:
 
 
 @contextmanager
-def _rename_lock(w: World):
+def _world_write_lock(w: World):
+    if not hasattr(w, "dir"):
+        yield
+        return
     lock_dir = w.dir / ".cache"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / "rename-key.lock"
+    lock_path = lock_dir / "write.lock"
     with lock_path.open("a+b") as stream:
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise MooError(f"another rename-key command is already running for world {w.name}") from None
+            raise MooError(
+                f"another file-writing command is already running for world {w.name}"
+            ) from None
         try:
             yield
         finally:
@@ -527,9 +547,14 @@ def _recover_local_migration(
             continue
         rendered = objdef.render(local)
         same_path = source == destination
+        if not same_path and destination.exists():
+            try:
+                same_path = source.samefile(destination)
+            except OSError:
+                same_path = False
         if key == source_key and destination_key is not None and destination_key != source_key:
             existing = snapshots[w.file_for(destination_key)][0]
-            if existing != rendered.encode():
+            if objdef.parse(existing.decode("utf-8")) != local:
                 raise MooError(
                     f"cannot recover rename: both {source.name} and {destination.name} exist"
                 )
@@ -545,7 +570,8 @@ def _recover_local_migration(
             new_temp = _temp_for(destination, "recover")
             _write_fsynced(new_temp, rendered)
             temporary.append(new_temp)
-            prepared.append((source, destination, same_path, new_temp))
+            original, identity = snapshots[source]
+            prepared.append((source, destination, same_path, new_temp, original, identity))
         write_state(state_temp, w.player, registry, w.toolbox)
         with state_temp.open("rb") as stream:
             os.fsync(stream.fileno())
@@ -561,7 +587,8 @@ def _recover_local_migration(
         )
         _write_rename_journal(journal, record)
         _assert_object_snapshots(w, snapshots, object_files)
-        for source, destination, same_path, new_temp in prepared:
+        for source, destination, same_path, new_temp, original, identity in prepared:
+            _assert_file_snapshot(source, original, identity)
             if not same_path and destination.exists():
                 raise _LocalEditError(
                     f"{destination.name} appeared during rename recovery"
@@ -571,6 +598,8 @@ def _recover_local_migration(
                 source.unlink()
             _fsync_dir(destination.parent)
         if remove_source is not None:
+            original, identity = snapshots[remove_source]
+            _assert_file_snapshot(remove_source, original, identity)
             remove_source.unlink()
             _fsync_dir(remove_source.parent)
         state_temp.replace(w.state_path)
@@ -633,7 +662,7 @@ def _recover_rename_key_locked(w: World, journal: Path) -> None:
 def cmd_rename_key(args):
     """Lock, prepare local migration, CAS-rename, then finalize files."""
     w = _world(args)
-    with _rename_lock(w):
+    with _world_write_lock(w):
         journal = w.state_path.with_name("state.json.rename-recovery.json")
         if getattr(args, "recover", False):
             if getattr(args, "old", None) is not None or getattr(args, "new", None) is not None:
@@ -934,6 +963,11 @@ def cmd_plan(args):
 
 def cmd_apply(args):
     w = _world(args)
+    with _world_write_lock(w):
+        _apply_locked(w, args)
+
+
+def _apply_locked(w: World, args) -> None:
     refs, files, p = _plan(w)
     if p.problems:
         _print_plan(p, args.destroy)

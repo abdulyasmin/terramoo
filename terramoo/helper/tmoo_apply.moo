@@ -10,22 +10,39 @@ ops = args[1];
 may_suspend = length(args) > 1 && args[2];
 out = {};
 revision = 0;
+protected_registry = "_terramoo_registry_state" in properties(this) && "_terramoo_registry_revision" in properties(this);
 for op in (ops)
   try
     "Earlier ops or suspended tasks may have changed the registry.";
     reg = this.registry;
-    if (length(reg) == 2)
+    reg_length = length(reg);
+    registry_revision = reg_length > 3 ? reg[4] | 0;
+    if (protected_registry)
+      protected_revision = this._terramoo_registry_revision;
+      revision = registry_revision;
+      if (revision < protected_revision)
+        revision = protected_revision + 1;
+      endif
+    elseif (registry_revision > revision)
+      revision = registry_revision;
+    endif
+    if (reg_length == 2)
       nonces = {};
       for ignored in (reg[1])
         nonces = {@nonces, ""};
       endfor
       reg = {reg[1], reg[2], nonces, revision};
-    elseif (length(reg) == 3)
+    elseif (reg_length == 3)
       reg = {reg[1], reg[2], reg[3], revision};
-    elseif (reg[4] > revision)
-      revision = reg[4];
     else
       reg[4] = revision;
+    endif
+    if (protected_registry)
+      this._terramoo_registry_revision = revision;
+      this._terramoo_registry_state = reg;
+    endif
+    if (reg_length < 4 || registry_revision != revision)
+      this.registry = reg;
     endif
     kind = op[1];
     r = 1;
@@ -58,20 +75,40 @@ for op in (ops)
         endif
         p = reg[2][i];
       endif
+      before = reg;
       r = create(p);
       "create() may run an :initialize verb that changes the registry.";
       reg = this.registry;
-      if (length(reg) == 2)
+      reg_length = length(reg);
+      registry_revision = reg_length > 3 ? reg[4] | 0;
+      if (protected_registry)
+        protected_revision = this._terramoo_registry_revision;
+        current = this._terramoo_registry_state;
+      endif
+      if (reg_length == 2)
         nonces = {};
         for ignored in (reg[1])
           nonces = {@nonces, ""};
         endfor
-        reg = {reg[1], reg[2], nonces, revision};
-      elseif (length(reg) == 3)
-        reg = {reg[1], reg[2], reg[3], revision};
-      elseif (reg[4] > revision)
-        revision = reg[4];
+        reg = {reg[1], reg[2], nonces, registry_revision};
+      elseif (reg_length == 3)
+        reg = {reg[1], reg[2], reg[3], registry_revision};
+      endif
+      if (protected_registry)
+        revision = registry_revision > protected_revision ? registry_revision | protected_revision;
+        if (current[4] > before[4] && equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]))
+          reg = current;
+        elseif (registry_revision < protected_revision)
+          revision = protected_revision + 1;
+        endif
+        reg[4] = revision;
+        this._terramoo_registry_revision = revision;
+        this._terramoo_registry_state = reg;
+        this.registry = reg;
       else
+        if (registry_revision > revision)
+          revision = registry_revision;
+        endif
         reg[4] = revision;
       endif
       j = r in reg[2];
@@ -90,7 +127,14 @@ for op in (ops)
       else
         reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], op[7]}, reg[4]};
       endif
-      reg[4] = reg[4] + 1;
+      revision = protected_registry ? this._terramoo_registry_revision + 1 | reg[4] + 1;
+      if (protected_registry)
+        this._terramoo_registry_revision = revision;
+      endif
+      reg[4] = revision;
+      if (protected_registry)
+        this._terramoo_registry_state = reg;
+      endif
       this.registry = reg;
     elseif (kind == "register")
       key = op[2];
@@ -116,7 +160,14 @@ for op in (ops)
       else
         reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], nonce}, reg[4]};
       endif
-      reg[4] = reg[4] + 1;
+      revision = protected_registry ? this._terramoo_registry_revision + 1 | reg[4] + 1;
+      if (protected_registry)
+        this._terramoo_registry_revision = revision;
+      endif
+      reg[4] = revision;
+      if (protected_registry)
+        this._terramoo_registry_state = reg;
+      endif
       this.registry = reg;
     elseif (kind == "rename")
       i = op[2];
@@ -136,13 +187,21 @@ for op in (ops)
         raise(E_INVARG, tostr("key ", reg[1][j], " is already registered as ", reg[2][j]));
       endif
       reg[1][i] = new_key;
-      reg[4] = reg[4] + 1;
+      revision = protected_registry ? this._terramoo_registry_revision + 1 | reg[4] + 1;
+      if (protected_registry)
+        this._terramoo_registry_revision = revision;
+      endif
+      reg[4] = revision;
+      if (protected_registry)
+        this._terramoo_registry_state = reg;
+      endif
       this.registry = reg;
       r = o;
     elseif (kind == "destroy")
       key = op[2];
       o = op[3];
       nonce = op[4];
+      before = reg;
       i = key in reg[1];
       if (i)
         if (reg[2][i] != o || reg[3][i] != nonce)
@@ -162,17 +221,36 @@ for op in (ops)
         endif
         ":recycle may register objects, remove keys or replace this binding.";
         reg = this.registry;
-        if (length(reg) == 2)
+        reg_length = length(reg);
+        registry_revision = reg_length > 3 ? reg[4] | 0;
+        if (protected_registry)
+          protected_revision = this._terramoo_registry_revision;
+          current = this._terramoo_registry_state;
+        endif
+        if (reg_length == 2)
           nonces = {};
           for ignored in (reg[1])
             nonces = {@nonces, ""};
           endfor
-          reg = {reg[1], reg[2], nonces, revision};
-        elseif (length(reg) == 3)
-          reg = {reg[1], reg[2], reg[3], revision};
-        elseif (reg[4] > revision)
-          revision = reg[4];
+          reg = {reg[1], reg[2], nonces, registry_revision};
+        elseif (reg_length == 3)
+          reg = {reg[1], reg[2], reg[3], registry_revision};
+        endif
+        if (protected_registry)
+          revision = registry_revision > protected_revision ? registry_revision | protected_revision;
+          if (current[4] > before[4] && equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]))
+            reg = current;
+          elseif (registry_revision < protected_revision)
+            revision = protected_revision + 1;
+          endif
+          reg[4] = revision;
+          this._terramoo_registry_revision = revision;
+          this._terramoo_registry_state = reg;
+          this.registry = reg;
         else
+          if (registry_revision > revision)
+            revision = registry_revision;
+          endif
           reg[4] = revision;
         endif
         i = key in reg[1];
@@ -181,7 +259,14 @@ for op in (ops)
         if (reg[2][i] != o || reg[3][i] != nonce)
           raise(E_INVARG, tostr("key ", reg[1][i], " changed during recycle"));
         endif
-        reg = {listdelete(reg[1], i), listdelete(reg[2], i), listdelete(reg[3], i), reg[4] + 1};
+        revision = protected_registry ? this._terramoo_registry_revision + 1 | reg[4] + 1;
+        if (protected_registry)
+          this._terramoo_registry_revision = revision;
+        endif
+        reg = {listdelete(reg[1], i), listdelete(reg[2], i), listdelete(reg[3], i), revision};
+        if (protected_registry)
+          this._terramoo_registry_state = reg;
+        endif
         this.registry = reg;
       endif
     elseif (kind == "link")

@@ -3,12 +3,15 @@ from types import SimpleNamespace
 import pytest
 
 from terramoo.errors import MooError
+from terramoo.moolit import serialize
 from terramoo.model import ObjectDef
 from terramoo.moolit import Obj
 from terramoo.world import (
     DEFAULT_IGNORE_PROPS,
     HELPER_VERSION_PROP,
     HELPER_VERBS,
+    REGISTRY_REVISION_PROP,
+    REGISTRY_STATE_PROP,
     TOOLBOX_NAME,
     World,
     registry_value,
@@ -219,20 +222,41 @@ def test_write_file_refuses_a_resolved_path_outside_objects_directory(tmp_path, 
 class BootstrapTransport:
     can_suspend = True
 
-    def __init__(self):
+    def __init__(self, registry=None, revision=None, saved_registry=None):
         self.expressions = []
         self.installed = []
+        self.sets = []
+        self.registry = registry or [[], [], [], 0]
+        self.revision = revision
+        self.saved_registry = saved_registry
 
     def eval(self, expression):
         self.expressions.append(expression)
+        props = []
+        if self.registry != [[], [], [], 0] or self.revision is not None:
+            props.append("registry")
+        if self.revision is not None:
+            props.append(REGISTRY_REVISION_PROP)
+        if self.saved_registry is not None:
+            props.append(REGISTRY_STATE_PROP)
         answers = {
             '"tmoo" in properties(player) && valid(player.tmoo)': False,
             "player.owned_objects": [Obj(9)],
             "#9.name": TOOLBOX_NAME,
             "properties(player)": [],
-            "properties(#9)": [],
+            "properties(#9)": props,
+            "#9.registry": self.registry,
+            f"#9.{REGISTRY_REVISION_PROP}": self.revision,
+            f"#9.{REGISTRY_STATE_PROP}": self.saved_registry,
         }
         return answers.get(expression, 0)
+
+    def set_prop(self, obj, name, value):
+        self.expressions.append(f"set {obj}.{name} = {value!r}")
+        self.sets.append((obj, name, value))
+
+    def serialize(self, value):
+        return serialize(value)
 
     def install_verb(self, obj, name, lines):
         self.installed.append((obj, name, lines))
@@ -272,8 +296,42 @@ def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     assert 'add_property(player, "tmoo", #9, {player, "r"})' in transport.expressions
     assert 'add_property(#9, "registry", {{}, {}, {}, 0}, {player, "r"})' in transport.expressions
     assert any(HELPER_VERSION_PROP in expression for expression in transport.expressions)
+    assert any(REGISTRY_REVISION_PROP in expression for expression in transport.expressions)
+    assert any(REGISTRY_STATE_PROP in expression for expression in transport.expressions)
     assert [name for _, name, _ in transport.installed] == list(HELPER_VERBS)
     assert all(lines for _, _, lines in transport.installed)
+
+
+@pytest.mark.parametrize(
+    "registry",
+    [
+        [["operator"], [Obj(10)], ["operator-generation"]],
+        [["operator"], [Obj(10)], ["operator-generation"], 2],
+    ],
+    ids=["legacy-shape", "lower-revision"],
+)
+def test_bootstrap_honors_external_registry_content_and_advances_revision(
+    tmp_path, registry
+):
+    stale = [["stale"], [Obj(11)], ["stale-generation"], 5]
+    transport = BootstrapTransport(
+        registry=registry,
+        revision=5,
+        saved_registry=stale,
+    )
+    w = World("test", tmp_path, "alice", {}, _transport=transport, _player=Obj(1))
+
+    assert w.bootstrap(log=lambda _: None) == Obj(9)
+
+    written = {name: value for _, name, value in transport.sets}
+    assert written[REGISTRY_REVISION_PROP] == 6
+    assert written[REGISTRY_STATE_PROP] == [
+        ["operator"],
+        [Obj(10)],
+        ["operator-generation"],
+        6,
+    ]
+    assert written["registry"] == written[REGISTRY_STATE_PROP]
 
 
 @pytest.mark.parametrize("can_suspend, suffix", [(True, ", 1)"), (False, ", 0)")])

@@ -28,8 +28,10 @@ SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 7
+HELPER_VERSION = 8
 HELPER_VERSION_PROP = "_terramoo_helper_version"
+REGISTRY_STATE_PROP = "_terramoo_registry_state"
+REGISTRY_REVISION_PROP = "_terramoo_registry_revision"
 
 # Properties that are the MOO's runtime state rather than the object's
 # definition, on LambdaCore and its descendants.  Exits and entrances are
@@ -350,6 +352,42 @@ class World:
         props = self.eval(f"properties({tb})")
         if "registry" not in props:
             self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})')
+        raw_registry = self.eval(f"{tb}.registry")
+        registry_revision = registry_value(raw_registry).revision
+        protected_revision = registry_revision
+        if REGISTRY_REVISION_PROP in props:
+            protected_revision = max(
+                protected_revision, self.eval(f"{tb}.{REGISTRY_REVISION_PROP}")
+            )
+        if REGISTRY_STATE_PROP in props:
+            saved_registry = self.eval(f"{tb}.{REGISTRY_STATE_PROP}")
+            protected_revision = max(
+                protected_revision, registry_value(saved_registry).revision
+            )
+        revision = (
+            protected_revision + 1
+            if registry_revision < protected_revision
+            else registry_revision
+        )
+        if REGISTRY_REVISION_PROP in props:
+            self.transport.set_prop(tb, REGISTRY_REVISION_PROP, revision)
+        else:
+            self.eval(
+                f'add_property({tb}, "{REGISTRY_REVISION_PROP}", {revision}, {{player, "r"}})'
+            )
+        if len(raw_registry) < 4:
+            nonces = raw_registry[2] if len(raw_registry) == 3 else ["" for _ in raw_registry[0]]
+            raw_registry = [raw_registry[0], raw_registry[1], nonces, revision]
+        else:
+            raw_registry[3] = revision
+        if REGISTRY_STATE_PROP in props:
+            self.transport.set_prop(tb, REGISTRY_STATE_PROP, raw_registry)
+        else:
+            self.eval(
+                f'add_property({tb}, "{REGISTRY_STATE_PROP}", '
+                f'{self.transport.serialize(raw_registry)}, {{player, "r"}})'
+            )
+        self.transport.set_prop(tb, "registry", raw_registry)
         for name in HELPER_VERBS:
             code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
             r = self.transport.install_verb(tb, name, code)

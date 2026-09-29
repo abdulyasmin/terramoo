@@ -234,6 +234,24 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, a
     return world, raw_registry, sent
 
 
+def _write_rename_recovery_journal(world, old="old_key", new="new_key"):
+    journal = world.state_path.with_name("state.json.rename-recovery.json")
+    journal.write_text(
+        json.dumps({
+            "phase": "remote-outcome-unknown",
+            "old_key": old,
+            "new_key": new,
+            "object": "#10",
+            "generation": "generation-10",
+            "registry_index": 1,
+            "registry_revision": 0,
+            "preserved_temporary_files": [],
+            "recovery_commands": ["tmoo rename-key --recover"],
+        })
+    )
+    return journal
+
+
 def test_rename_key_rewrites_every_parsed_reference(tmp_path, monkeypatch):
     world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
     world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
@@ -397,6 +415,91 @@ def test_rename_key_recovery_confirms_remote_reversal_and_preserves_edit(
     assert list(world.dir.rglob("*.tmp")) == []
 
 
+def test_rename_key_recovery_rechecks_each_source_immediately_before_replace(
+    tmp_path, monkeypatch
+):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    raw_registry[0][0] = "new_key"
+    raw_registry[3] = 1
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    hall = ObjectDef(
+        key="z_hall",
+        name="Hall",
+        parent=Obj(2),
+        props=[PropDef("target", Ref("@", "old_key"))],
+    )
+    world.write_file(hall)
+    journal = _write_rename_recovery_journal(world)
+    edited = ObjectDef(key="z_hall", name="Edited concurrently", parent=Obj(2))
+    original_replace = type(world.state_path).replace
+    injected = False
+
+    def inject_edit_after_first_replace(path, target):
+        nonlocal injected
+        result = original_replace(path, target)
+        if not injected and target == world.file_for("new_key") and ".recover." in path.name:
+            injected = True
+            world.file_for("z_hall").write_text(objdef.render(edited))
+        return result
+
+    monkeypatch.setattr(type(world.state_path), "replace", inject_edit_after_first_replace)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="z_hall.moo changed after it was read"):
+        cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert injected
+    assert objdef.parse(world.file_for("z_hall").read_text()).name == "Edited concurrently"
+    assert journal.exists()
+
+
+def test_rename_key_recovers_case_only_remote_new_outcome(tmp_path, monkeypatch):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    raw_registry[0][0] = "OLD_KEY"
+    raw_registry[3] = 1
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    journal = _write_rename_recovery_journal(world, new="OLD_KEY")
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert objdef.parse(world.file_for("OLD_KEY").read_text()).key == "OLD_KEY"
+    assert not journal.exists()
+
+
+def test_rename_key_recovers_case_only_remote_reversed_outcome(tmp_path, monkeypatch):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    raw_registry[3] = 2
+    world.write_file(ObjectDef(key="OLD_KEY", name="Old", parent=Obj(2)))
+    journal = _write_rename_recovery_journal(world, new="OLD_KEY")
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert objdef.parse(world.file_for("old_key").read_text()).key == "old_key"
+    assert not journal.exists()
+
+
+def test_rename_key_recovery_accepts_semantically_equal_authored_destination(
+    tmp_path, monkeypatch
+):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    raw_registry[3] = 2
+    old = ObjectDef(key="old_key", name="Old", parent=Obj(2))
+    new = ObjectDef(key="new_key", name="Old", parent=Obj(2))
+    world.write_file(old)
+    world.file_for("old_key").write_text(objdef.render(old) + "\n\n")
+    world.write_file(new)
+    journal = _write_rename_recovery_journal(world)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert objdef.parse(world.file_for("old_key").read_text()) == old
+    assert not world.file_for("new_key").exists()
+    assert not journal.exists()
+
+
 def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(tmp_path, monkeypatch):
     world, raw_registry, sent = _rename_world(tmp_path, monkeypatch, old="مرحبا")
     monkeypatch.setattr(cli, "_world", lambda args: world)
@@ -510,16 +613,25 @@ def test_rename_key_detects_an_edit_to_an_initially_unaffected_file(tmp_path, mo
     assert world.state_path.with_name("state.json.rename-recovery.json").exists()
 
 
-def test_rename_key_holds_a_per_world_command_lock(tmp_path, monkeypatch):
+def test_rename_key_holds_a_per_world_write_lock(tmp_path, monkeypatch):
     world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
-    with cli._rename_lock(world):
-        with pytest.raises(MooError, match="another rename-key command"):
+    with cli._world_write_lock(world):
+        with pytest.raises(MooError, match="another file-writing command"):
             cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
 
     assert sent == []
     assert raw_registry[0] == ["old_key"]
+
+
+def test_pull_and_rename_key_share_the_world_write_lock(tmp_path, monkeypatch):
+    world, _, _ = _rename_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with cli._world_write_lock(world):
+        with pytest.raises(MooError, match="another file-writing command"):
+            cli.cmd_pull(SimpleNamespace(keys=[]))
 
 
 def test_rename_key_rejects_case_folded_destination_file_collision(tmp_path, monkeypatch):

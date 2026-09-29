@@ -114,6 +114,8 @@ add_verb(old, {{#2, "xd", "recycle"}}, {{"this", "none", "this"}});
 errors = set_verb_code(old, "recycle", {serialize(recycle)});
 if (errors) raise(E_INVARG, toliteral(errors)); endif
 tool.registry = {initial};
+add_property(tool, "_terramoo_registry_revision", 0, {{#2, "r"}});
+add_property(tool, "_terramoo_registry_state", tool.registry, {{#2, "r"}});
 result = tool:tmoo_apply({{{{"destroy", "old", old, "old-generation"}}, {{"register", "after", after, "after-generation"}}}});
 return {{result, tool.registry == {{{{"{expected_key}", "after"}}, {{survivor, after}}, {{"survivor-generation", "after-generation"}}, {expected_revision}}}, valid(old), valid(survivor), after}};
 .
@@ -270,6 +272,103 @@ return {result, tool.registry[1][1], tool.registry[4]};
     assert result[0][1][0] == 1
     assert result[0][2][:2] == [0, "E_INVARG"]
     assert result[1:] == ["other", 3]
+
+
+def test_create_keeps_interleaved_registration_and_never_reuses_revision(
+    offline_moo, tmp_path
+):
+    # The nested helper call models task B running while task A's callback is
+    # yielded; the callback then resumes and restores its saved registry.
+    initialize = serialize([
+        "saved = this.toolbox.registry;",
+        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+        "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
+        "this.toolbox.registry = saved;",
+        "return 1;",
+    ])
+    body = """
+existing = create(#-1);
+other = create(#-1);
+parent = create(#-1);
+add_property(existing, "_terramoo_generation", "existing-generation", {#2, "r"});
+add_property(parent, "toolbox", tool, {#2, ""});
+add_property(parent, "other", other, {#2, ""});
+add_verb(parent, {#2, "xd", "initialize"}, {"this", "none", "this"});
+set_verb_code(parent, "initialize", INITIALIZE_CODE);
+tool.registry = {{"existing"}, {existing}, {"existing-generation"}, 2};
+add_property(tool, "_terramoo_registry_revision", 2, {#2, "r"});
+add_property(tool, "_terramoo_registry_state", tool.registry, {#2, "r"});
+add_property(tool, "interleaved_revision", 0, {#2, "r"});
+result = tool:tmoo_apply({{"create", "child", #-1, "", parent, "Child", "child-generation"}});
+return {result, tool.registry, tool.interleaved_revision, tool._terramoo_registry_revision};
+""".replace("INITIALIZE_CODE", initialize)
+
+    result = _run_helper_script(offline_moo, tmp_path, body)
+
+    registry = registry_value(result[1])
+    assert set(registry) == {"existing", "other", "child"}
+    assert registry.revision == 4
+    assert result[2:] == [3, 4]
+    assert result[2:] == sorted(set(result[2:]))
+
+
+@pytest.mark.parametrize("legacy", [True, False], ids=["legacy-shape", "lower-revision"])
+def test_helper_honors_external_registry_content_and_advances_revision(
+    offline_moo, tmp_path, legacy
+):
+    registry = (
+        '{{"operator"}, {operator}, {"operator-generation"}}'
+        if legacy
+        else '{{"operator"}, {operator}, {"operator-generation"}, 2}'
+    )
+    result = _run_helper_script(offline_moo, tmp_path, f"""
+stale = create(#-1);
+operator = create(#-1);
+after = create(#-1);
+add_property(stale, "_terramoo_generation", "stale-generation", {{#2, "r"}});
+add_property(operator, "_terramoo_generation", "operator-generation", {{#2, "r"}});
+tool.registry = {{{{"stale"}}, {{stale}}, {{"stale-generation"}}, 5}};
+add_property(tool, "_terramoo_registry_revision", 5, {{#2, "r"}});
+add_property(tool, "_terramoo_registry_state", tool.registry, {{#2, "r"}});
+tool.registry = {registry};
+result = tool:tmoo_apply({{{{"register", "after", after, "after-generation"}}}});
+return {{result, tool.registry, tool._terramoo_registry_revision}};
+""")
+
+    registry = registry_value(result[1])
+    assert result[0][0][0] == 1
+    assert set(registry) == {"operator", "after"}
+    assert registry.revision == result[2] == 7
+
+
+def test_create_preserves_case_only_callback_registry_rewrite(offline_moo, tmp_path):
+    initialize = serialize([
+        "saved = this.toolbox.registry;",
+        'this.toolbox:tmoo_apply({{"rename", 1, 2, this.existing, "existing-generation", "task_b"}});',
+        'this.toolbox.registry = {{"EXISTING"}, saved[2], saved[3], saved[4]};',
+        "return 1;",
+    ])
+    body = """
+existing = create(#-1);
+parent = create(#-1);
+add_property(existing, "_terramoo_generation", "existing-generation", {#2, "r"});
+add_property(parent, "toolbox", tool, {#2, ""});
+add_property(parent, "existing", existing, {#2, ""});
+add_verb(parent, {#2, "xd", "initialize"}, {"this", "none", "this"});
+set_verb_code(parent, "initialize", INITIALIZE_CODE);
+tool.registry = {{"existing"}, {existing}, {"existing-generation"}, 2};
+add_property(tool, "_terramoo_registry_revision", 2, {#2, "r"});
+add_property(tool, "_terramoo_registry_state", tool.registry, {#2, "r"});
+result = tool:tmoo_apply({{"create", "child", #-1, "", parent, "Child", "child-generation"}});
+return {result, tool.registry, tool._terramoo_registry_revision};
+""".replace("INITIALIZE_CODE", initialize)
+
+    result = _run_helper_script(offline_moo, tmp_path, body)
+
+    registry = registry_value(result[1])
+    assert result[0][0][0] == 1
+    assert list(registry) == ["EXISTING", "child"]
+    assert registry.revision == result[2] == 5
 
 
 def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):
