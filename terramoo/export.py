@@ -51,6 +51,16 @@ def _owner(o: Obj, refs: Refs):
 
 def _to_def(key: str, rec: list, refs: Refs, ignore: set[str]) -> ObjectDef:
     _, name, parent, location, owner, flags, props, verbs = rec
+    if not (
+        isinstance(name, str)
+        and isinstance(parent, Obj)
+        and isinstance(location, Obj)
+        and isinstance(owner, Obj)
+        and isinstance(flags, str)
+        and isinstance(props, list)
+        and isinstance(verbs, list)
+    ):
+        raise MooError(f"tmoo_export returned a malformed record for {key}")
     obj = ObjectDef(
         key=key,
         name=name,
@@ -59,19 +69,50 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str]) -> ObjectDef:
         owner=_owner(owner, refs),
         flags=normalize(flags, "rwf"),
     )
-    for pname, defined, powner, perms, literal in props:
+    for prop in props:
+        if not (
+            isinstance(prop, list)
+            and len(prop) == 5
+            and isinstance(prop[0], str)
+            and type(prop[1]) is int
+            and prop[1] in (0, 1)
+            and isinstance(prop[2], Obj)
+            and isinstance(prop[3], str)
+            and isinstance(prop[4], str)
+        ):
+            raise MooError(f"tmoo_export returned a malformed property record for {key}")
+        pname, defined, powner, perms, literal = prop
         if pname in ignore:
             continue
+        try:
+            value = moolit.parse(literal)
+        except moolit.LiteralError as e:
+            raise MooError(f"tmoo_export returned {key} property {pname!r} with a malformed literal: {e}") from None
         obj.props.append(
             PropDef(
                 name=pname,
-                value=refs.symbolize(moolit.parse(literal)),
+                value=refs.symbolize(value),
                 perms=perms,
                 owner=_owner(powner, refs),
                 defined=bool(defined),
             )
         )
-    for names, vowner, perms, args, code in verbs:
+    for verb in verbs:
+        if not (
+            isinstance(verb, list)
+            and len(verb) == 5
+            and isinstance(verb[0], str)
+            and isinstance(verb[1], Obj)
+            and isinstance(verb[2], str)
+            and isinstance(verb[3], list)
+            and len(verb[3]) == 3
+            and all(isinstance(arg, str) for arg in verb[3])
+            and isinstance(verb[4], list)
+            and all(isinstance(line, str) for line in verb[4])
+        ):
+            name = verb[0] if isinstance(verb, list) and verb and isinstance(verb[0], str) else "?"
+            raise MooError(f"tmoo_export returned {key} verb {name!r} with malformed fields")
+        names, vowner, perms, args, code = verb
         obj.verbs.append(VerbDef(names=names, code=list(code), args=tuple(args), perms=perms, owner=_owner(vowner, refs)))
     return obj
 

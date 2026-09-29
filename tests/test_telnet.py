@@ -43,7 +43,8 @@ class FakeMoo:
                 out = self.reply(m.group(1) if m else None, text)
                 if out:
                     try:
-                        conn.sendall("".join(x + "\r\n" for x in out).encode())
+                        lines = [x.encode() if isinstance(x, str) else x for x in out]
+                        conn.sendall(b"\r\n".join(lines) + b"\r\n")
                     except OSError:
                         return
 
@@ -59,42 +60,44 @@ def answer(value_literal, chunk=4, noise=()):
         if is_sentinel(tag, line):
             return [tag + "Z"]
         parts = [value_literal[i:i + chunk] for i in range(0, len(value_literal), chunk)]
-        return [tag + "S", *noise, tag + "B" + str(len(value_literal)), *[tag + "D" + p for p in parts], tag + "E", "=> 0"]
+        return [tag + "S", *noise, tag + "B" + str(len(value_literal)), tag + "C1",
+                *[tag + "D" + p for p in parts], tag + "E", "=> 0"]
     return reply
 
 
-def client(fake, **kw):
-    transport = Telnet("local", 0, "alice", "pw", timeout=3, connect_timeout=3, **kw)
-
-    def open_fake():
-        transport._wire = _Wire(fake.client)
-        transport._drain(1.0)
-        transport._wire.send_line(transport.login_template.format(player=transport.player, password=transport.password))
-        try:
-            transport._request("player", transport.connect_timeout, login=True)
-        except MooError as error:
-            transport.close()
-            raise MooError(
-                f"could not log in to {transport.host}:{transport.port} as {transport.player}: {error}"
-            ) from None
-
-    transport._open = open_fake
-    return transport
+def client(monkeypatch, fake, **kw):
+    monkeypatch.setattr(socket, "create_connection", lambda address, timeout: fake.client)
+    return Telnet("local", 0, "alice", "pw", timeout=3, connect_timeout=3, **kw)
 
 
-def test_value_is_reassembled_from_chunks_amid_noise():
+def test_value_is_reassembled_from_chunks_amid_noise(monkeypatch):
     fake = FakeMoo(answer('{#12, "a \\"b\\"", {1, 2.5}}', noise=["Bob says, \"hi\""]))
-    t = client(fake)
+    t = client(monkeypatch, fake)
     assert t.eval("anything") == [Obj(12), 'a "b"', [1, 2.5]]
     assert fake.received[0] == "connect alice pw"
     assert "Bob says, \"hi\"" in t.noise
+
+
+def test_socketpair_client_runs_production_open(monkeypatch):
+    opened = []
+    real_open = Telnet._open
+
+    def tracked_open(self):
+        opened.append((self.host, self.port))
+        return real_open(self)
+
+    monkeypatch.setattr(Telnet, "_open", tracked_open)
+    t = client(monkeypatch, FakeMoo(answer("1")))
+
+    assert t.eval("anything") == 1
+    assert opened == [("local", 0)]
 
 
 @pytest.mark.parametrize("expression, error_reply, expected", [
     ("secret", lambda tag: [tag + "S", tag + 'X{E_PERM, "Permission denied"}'], "E_PERM: Permission denied"),
     ("bad(", lambda tag: ["Line 1:  syntax error", "1 error."], "did not compile:\n  Line 1:  syntax error"),
 ])
-def test_errors_become_moo_errors(expression, error_reply, expected):
+def test_errors_become_moo_errors(monkeypatch, expression, error_reply, expected):
     """A raised error is reported as such; a compile error quotes what the core printed."""
     def reply(tag, line):
         if tag is None:
@@ -104,18 +107,18 @@ def test_errors_become_moo_errors(expression, error_reply, expected):
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
         return error_reply(tag)
-    t = client(FakeMoo(reply))
+    t = client(monkeypatch, FakeMoo(reply))
     with pytest.raises(MooError, match=expected):
         t.eval(expression)
 
 
-def test_login_failure_is_reported_at_once():
+def test_login_failure_is_reported_at_once(monkeypatch):
     def reply(tag, line):
         if tag is None:
             return ["Either that player does not exist, or has a different password."]
         return ["I don't understand that."]
     with pytest.raises(MooError, match="could not log in .*does not exist"):
-        client(FakeMoo(reply)).eval("1")
+        client(monkeypatch, FakeMoo(reply)).eval("1")
 
 
 def test_program_is_one_line_with_the_configured_prefix_and_tell():
@@ -123,6 +126,7 @@ def test_program_is_one_line_with_the_configured_prefix_and_tell():
     line = t.program("~abcdefghij~", "1 + 1")
     assert "\n" not in line
     assert line.startswith(';player:tell("~abcdefghij~S"); try _r = (1 + 1);')
+    assert 'length("é")' in line
     assert "_v[_i * 10 + 1..min((_i + 1) * 10, length(_v))]" in line
 
 
@@ -133,11 +137,11 @@ def test_wire_strips_and_refuses_telnet_negotiation():
     wire._feed(bytes([IAC]))
     wire._feed(bytes([WILL, 70]) + b"hello\r\nwor")
     wire._feed(b"ld " + bytes([IAC, IAC]) + b"\r\n")
-    assert list(wire.lines) == ["hello", "world �"]
+    assert list(wire.lines) == ["hello", "world \udcff"]
     assert b.recv(16) == bytes([IAC, 254, 70])  # DONT 70
 
 
-def test_declared_answer_length_must_match_the_received_chunks():
+def test_declared_answer_length_must_match_the_received_chunks(monkeypatch):
     def reply(tag, line):
         if tag is None:
             return []
@@ -147,8 +151,45 @@ def test_declared_answer_length_must_match_the_received_chunks():
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
         return [tag + "S", tag + "B2", tag + "D1", tag + "E"]
 
-    t = client(FakeMoo(reply))
+    t = client(monkeypatch, FakeMoo(reply))
     with pytest.raises(MooError, match="declared 2 characters but received 1"):
+        t.eval("anything")
+
+
+def test_unicode_answer_split_between_utf8_bytes_is_reassembled(monkeypatch):
+    literal = '"' + "a" * 898 + "ébb" + '"'
+    payload = literal.encode()
+    assert len(payload) == 904
+
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        if "_r = (player)" in line:
+            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
+        prefix = tag.encode()
+        return [prefix + b"S", prefix + b"B904", prefix + b"C2", prefix + b"D" + payload[:900],
+                prefix + b"D" + payload[900:], prefix + b"E"]
+
+    t = client(monkeypatch, FakeMoo(reply))
+    assert t.eval("anything") == literal[1:-1]
+
+
+def test_truncated_unicode_answer_is_rejected(monkeypatch):
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        if "_r = (player)" in line:
+            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
+        # A complete mooR literal `"éa"` has four characters.  Its truncated
+        # prefix happens to occupy four UTF-8 bytes, which is not enough.
+        return [tag + "S", tag + "B4", tag + "C1", tag + 'D"é"', tag + "E"]
+
+    t = client(monkeypatch, FakeMoo(reply))
+    with pytest.raises(MooError, match="declared 4"):
         t.eval("anything")
 
 
@@ -162,7 +203,7 @@ def test_multiline_expressions_are_rejected_before_they_reach_the_wire(expressio
 
 
 @pytest.mark.parametrize("declared", [3, 4])
-def test_declared_length_may_count_characters_or_utf8_bytes(declared):
+def test_declared_length_may_count_characters_or_utf8_bytes(monkeypatch, declared):
     # mooR counts '"é"' as 3 characters; LambdaMOO and ToastStunt as 4 bytes.
     def reply(tag, line):
         if tag is None:
@@ -171,7 +212,8 @@ def test_declared_length_may_count_characters_or_utf8_bytes(declared):
             return [tag + "Z"]
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
-        return [tag + "S", tag + f"B{declared}", tag + 'D"é"', tag + "E"]
+        unit = 1 if declared == 3 else 2
+        return [tag + "S", tag + f"B{declared}", tag + f"C{unit}", tag + 'D"é"', tag + "E"]
 
-    t = client(FakeMoo(reply))
+    t = client(monkeypatch, FakeMoo(reply))
     assert t.eval("anything") == "é"

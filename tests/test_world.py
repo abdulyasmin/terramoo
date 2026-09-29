@@ -88,10 +88,12 @@ def test_load_files_wraps_malformed_object_input_with_its_path(tmp_path):
     ],
 )
 def test_registry_value_rejects_malformed_registry_shapes(raw):
-    assert registry_value(raw) == {}
+    with pytest.raises(MooError, match="malformed registry"):
+        registry_value(raw)
 
 
 def test_registry_value_accepts_parallel_key_and_object_lists():
+    assert registry_value([[], []]) == {}
     assert registry_value([["hall", "door"], [Obj(10), Obj(11)]]) == {
         "hall": Obj(10),
         "door": Obj(11),

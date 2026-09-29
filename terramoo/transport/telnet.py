@@ -7,6 +7,7 @@ other line is ignored:
 
     ~tag~S              the code started (it compiled)
     ~tag~B<length>      the value follows, as toliteral() text of that length
+    ~tag~C<unit>        how length() counts UTF-8: 1 character or 2 bytes for é
     ~tag~D<chunk>       ... in chunks, so no line is long enough to be cut
     ~tag~E              the value is complete
     ~tag~X{E_X, "msg"}  the MOO raised this instead
@@ -37,7 +38,7 @@ from .. import moolit
 from ..errors import MooError
 from . import Transport
 
-_TAG = re.compile(r"~[A-Za-z0-9]{10}~[SBDEXZ]")
+_TAG = re.compile(r"~[A-Za-z0-9]{10}~[SBCDEXZ]")
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 LOGIN_FAILED = (
     "either that player does not exist",
@@ -47,6 +48,11 @@ LOGIN_FAILED = (
     "login failed",
     "that player does not exist",
 )
+
+
+def _readable(line: str) -> str:
+    """`line` with the undecodable bytes the wire kept shown as U+FFFD."""
+    return line.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 class _Wire:
@@ -106,9 +112,14 @@ class _Wire:
         self.raw.extend(chunk)
         self.text.extend(self._strip_iac())
         while (nl := self.text.find(b"\n")) >= 0:
-            line = bytes(self.text[:nl]).rstrip(b"\r")
+            line = bytes(self.text[:nl])
             del self.text[:nl + 1]
-            self.lines.append(line.decode("utf-8", errors="replace"))
+            if line.endswith(b"\r"):
+                line = line[:-1]
+            line = line.replace(b"\r\0", b"\r")  # NVT: CR NUL is a literal CR
+            # A byte-counting MOO can split a UTF-8 character between D lines.
+            # Surrogate escapes preserve those bytes until _request rejoins them.
+            self.lines.append(line.decode("utf-8", errors="surrogateescape"))
 
     def _strip_iac(self) -> bytearray:
         """Plain bytes out of `self.raw`; a telnet command cut off at the
@@ -198,7 +209,7 @@ class Telnet(Transport):
     def _drain(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds
         while (line := self._wire.read_line(deadline)) is not None:
-            self.noise.append(line)
+            self.noise.append(_readable(line))
 
     def close(self) -> None:
         if self._wire is not None:
@@ -229,6 +240,7 @@ class Telnet(Transport):
             f"{self.eval_prefix}{self._tell(q(tag + 'S'))}; "
             f"try _r = ({expression}); _v = toliteral(_r); "
             f"{self._tell(q(tag + 'B') + ' + tostr(length(_v))')}; "
+            f"{self._tell(q(tag + 'C') + ' + tostr(length(\"é\"))')}; "
             f"for _i in [0..(length(_v) - 1) / {n}] "
             f"{self._tell(q(tag + 'D') + f' + _v[_i * {n} + 1..min((_i + 1) * {n}, length(_v))]')}; "
             f"if (_i % 16 == 15) suspend(0); endif "
@@ -247,8 +259,9 @@ class Telnet(Transport):
         wire.send_line(self.program(tag, expression))
         wire.send_line(f"{self.eval_prefix}{self._tell(moolit.escape(tag + 'Z'))}")
         started = sentinel = False
-        chunks: list[str] = []
+        chunks: list[bytes] = []
         expected_length: int | None = None
+        length_unit: int | None = None
         untagged: list[str] = []
         outcome = None
         deadline = time.monotonic() + timeout
@@ -260,6 +273,7 @@ class Telnet(Transport):
                 what = "log in" if login and not started else "answer"
                 raise MooError(f"the MOO did not {what} within {timeout:.0f}s" + self._context(untagged))
             if not line.startswith(tag):
+                line = _readable(line)
                 self.noise.append(line)
                 if not _TAG.match(line):  # a stale tag from an earlier request is not news
                     untagged.append(line)
@@ -272,27 +286,46 @@ class Telnet(Transport):
                 started = True
             elif kind == "B":
                 chunks = []
+                length_unit = None
                 try:
                     expected_length = int(rest)
                 except ValueError:
                     expected_length = None
+            elif kind == "C":
+                try:
+                    length_unit = int(rest)
+                except ValueError:
+                    length_unit = None
             elif kind == "D":
-                chunks.append(rest)
+                chunks.append(rest.encode("utf-8", errors="surrogateescape"))
             elif kind == "E":
-                text = "".join(chunks)
-                if expected_length is None:
-                    outcome = ("P", "the MOO sent an answer without a valid length")
-                # LambdaMOO counts bytes, mooR characters; either one is whole.
-                elif expected_length not in (len(text), len(text.encode("utf-8"))):
-                    outcome = ("P", f"the MOO declared {expected_length} characters but received {len(text)}")
+                data = b"".join(chunks)
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    outcome = ("P", "the MOO sent an answer that is not valid UTF-8")
                 else:
-                    outcome = (kind, text)
+                    if expected_length is None:
+                        outcome = ("P", "the MOO sent an answer without a valid length")
+                    else:
+                        if length_unit == 2:
+                            received, unit = len(data), "bytes"
+                        elif length_unit == 1 or len(data) == len(text):
+                            received, unit = len(text), "characters"
+                        else:
+                            received = None
+                            outcome = ("P", "the MOO sent a Unicode answer without a valid length convention")
+                        if received is not None:
+                            if expected_length != received:
+                                outcome = ("P", f"the MOO declared {expected_length} {unit} but received {received}")
+                            else:
+                                outcome = (kind, text)
                 if sentinel:
                     break
                 # Read on to this request's sentinel so it cannot confuse the next.
                 deadline = time.monotonic() + min(timeout, 10)
             elif kind == "X":
-                outcome = (kind, rest)
+                outcome = (kind, _readable(rest))
                 if sentinel:
                     break
                 # Read on to this request's sentinel so it cannot confuse the next.

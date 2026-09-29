@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import export as export_mod, moolit
+from terramoo import cli, export as export_mod, moolit
 from terramoo.errors import MooError
 from terramoo.model import PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
@@ -96,8 +96,23 @@ def test_export_rejects_a_malformed_nested_property_literal():
     world = ExportWorld({obj: record})
     refs = Refs(player=Obj(1), registry={"hall": obj})
 
-    with pytest.raises(moolit.LiteralError, match="unexpected"):
+    with pytest.raises(MooError, match=r"hall property 'bad'.*unexpected"):
         export_mod.export(world, refs, ["hall"])
+
+
+def test_malformed_nested_verb_code_never_reaches_the_writer():
+    obj = Obj(10)
+    record = [
+        obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [],
+        [["look", Obj(1), "rd", ["this", "none", "this"], "return 1;"]],
+    ]
+    world = ExportWorld({obj: record})
+    world.file_for = lambda key: SimpleNamespace(exists=lambda: False)
+    world.write_file = lambda value: pytest.fail("malformed export reached the writer")
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    with pytest.raises(MooError, match=r"hall verb 'look'.*malformed"):
+        cli._write_exports(world, refs, ["hall"])
 
 
 @pytest.mark.parametrize(
