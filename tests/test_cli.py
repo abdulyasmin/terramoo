@@ -10,7 +10,7 @@ from terramoo.model import ObjectDef, PropDef
 from terramoo.moolit import Obj, Ref
 from terramoo.plan import Plan
 from terramoo.refs import Refs
-from terramoo.world import World
+from terramoo.world import World, registry_value
 
 
 @pytest.mark.parametrize("text, obj", [
@@ -59,6 +59,18 @@ def test_confirmed_apply_forwards_the_destroy_flag(monkeypatch, capsys):
     assert seen["destroy"] is True
     assert seen["plan"] is pending
     assert capsys.readouterr().out.endswith("applied 2 op(s)\n")
+
+
+def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch):
+    world = SimpleNamespace(
+        refs=lambda: registry_value([["hall", "Hall"], [Obj(10), Obj(11)]]),
+        load_files=lambda: pytest.fail("files loaded after malformed registry"),
+    )
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply mutated the MOO"))
+
+    with pytest.raises(MooError, match="toolbox has a malformed registry"):
+        cli.cmd_apply(SimpleNamespace(yes=True, destroy=True))
 
 
 def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monkeypatch):

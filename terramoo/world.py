@@ -90,7 +90,9 @@ def registry_value(raw) -> dict[str, Obj]:
         keys, objects = raw
         valid_keys = all(isinstance(k, str) for k in keys)
         valid_objects = all(isinstance(o, Obj) for o in objects)
-        if len(keys) == len(objects) and valid_keys and valid_objects:
+        unique_keys = valid_keys and len({k.lower() for k in keys}) == len(keys)
+        unique_objects = valid_objects and len(set(objects)) == len(objects)
+        if len(keys) == len(objects) and valid_keys and valid_objects and unique_keys and unique_objects:
             return dict(zip(keys, objects))
     raise MooError("toolbox has a malformed registry")
 

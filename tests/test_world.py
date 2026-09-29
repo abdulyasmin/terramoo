@@ -85,6 +85,8 @@ def test_load_files_wraps_malformed_object_input_with_its_path(tmp_path):
         [["hall", "door"], [Obj(10)]],
         [["hall"], [10]],
         [[1], [Obj(10)]],
+        [["hall", "Hall"], [Obj(10), Obj(11)]],
+        [["hall", "door"], [Obj(10), Obj(10)]],
     ],
 )
 def test_registry_value_rejects_malformed_registry_shapes(raw):
