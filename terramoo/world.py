@@ -118,10 +118,15 @@ class World:
         conn = dict(cfg.get("connection", {}))
         if "player" not in cfg:
             raise MooError(f"{cfg_path}: `player` is required")
-        ignore = set(DEFAULT_IGNORE_PROPS) | set(cfg.get("ignore_props", []))
-        ignore -= set(cfg.get("keep_props", []))
+        core = dict(cfg.get("core", {}))
+        ignore = (
+            set(DEFAULT_IGNORE_PROPS)
+            | set(cfg.get("ignore_props", []))
+            | set(core.get("ignore_props", []))
+        )
+        ignore -= set(cfg.get("keep_props", [])) | set(core.get("keep_props", []))
         return cls(name=name, root=root, player_name=cfg["player"], connection=conn,
-                   core=dict(cfg.get("core", {})), ignore_props=ignore)
+                   core=core, ignore_props=ignore)
 
     # ----- paths
 
