@@ -165,6 +165,12 @@ def test_registry_value_accepts_parallel_key_and_object_lists():
     verified = registry_value([["hall"], [Obj(10)], ["generation-hall"]])
     assert verified == {"hall": Obj(10)}
     assert verified.generations == {"hall": "generation-hall"}
+    assert verified.revision == 0
+
+    revised = registry_value([["hall"], [Obj(10)], ["generation-hall"], 7])
+    assert revised == {"hall": Obj(10)}
+    assert revised.generations == {"hall": "generation-hall"}
+    assert revised.revision == 7
 
     partially_migrated = registry_value(
         [["hall", "door"], [Obj(10), Obj(11)], ["generation-hall", ""]]
@@ -264,7 +270,7 @@ def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     assert w.bootstrap(log=lambda _: None) == Obj(9)
     assert not any(expression.startswith("create(") for expression in transport.expressions)
     assert 'add_property(player, "tmoo", #9, {player, "r"})' in transport.expressions
-    assert 'add_property(#9, "registry", {{}, {}, {}}, {player, "r"})' in transport.expressions
+    assert 'add_property(#9, "registry", {{}, {}, {}, 0}, {player, "r"})' in transport.expressions
     assert any(HELPER_VERSION_PROP in expression for expression in transport.expressions)
     assert [name for _, name, _ in transport.installed] == list(HELPER_VERBS)
     assert all(lines for _, _, lines in transport.installed)

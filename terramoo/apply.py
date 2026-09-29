@@ -15,7 +15,7 @@ from uuid import uuid4
 from . import moolit
 from .errors import MooError
 from .moolit import Obj, Ref
-from .plan import Plan, VerbTarget, describe, diff_object
+from .plan import Plan, VerbTarget, _exit_classes, describe, diff_object
 from .refs import Refs
 from .world import World
 
@@ -176,8 +176,22 @@ def _replan_created(world: World, plan_ops: list[tuple], created: list[str], fil
             if op[0] == "link" or not (
                 isinstance(op[1], Ref) and op[1].kind == "@" and op[1].name.lower() in created_folded
             )]
-    fresh = [op for key in created if live.get(key) is not None
-             for op in diff_object(key, files_by_name[key.lower()], live[key], refs)]
+    wanted_exits = _exit_classes(files, refs, live=False)
+    current_exits = _exit_classes(
+        {key: obj for key, obj in live.items() if obj is not None}, refs, live=True
+    )
+    fresh = [
+        op
+        for key in created if live.get(key) is not None
+        for op in diff_object(
+            key,
+            files_by_name[key.lower()],
+            live[key],
+            refs,
+            was_exit=current_exits.get(key.lower(), wanted_exits.get(key.lower(), False)),
+            will_exit=wanted_exits.get(key.lower(), False),
+        )
+    ]
     links = [op for op in kept if op[0] == "link"]
     return [op for op in kept if op[0] != "link"] + fresh + links
 

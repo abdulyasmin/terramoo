@@ -259,8 +259,8 @@ def test_exit_endpoint_changes_are_one_atomic_reconciliation_op():
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("endpoint", Ref("@", "hall"), "source", Obj(201), Obj(202)),
-        ("endpoint", Ref("@", "hall"), "dest", Obj(203), Obj(204)),
+        ("endpoint", Ref("@", "hall"), "source", Obj(201), Obj(202), 0, 0),
+        ("endpoint", Ref("@", "hall"), "dest", Obj(203), Obj(204), 0, 0),
     ]
 
 
@@ -290,8 +290,8 @@ def test_non_object_source_and_dest_values_use_endpoint_compare_and_set():
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("endpoint", Ref("@", "hall"), "source", "an old book", "a new book"),
-        ("endpoint", Ref("@", "hall"), "dest", ["a"], ["b"]),
+        ("endpoint", Ref("@", "hall"), "source", "an old book", "a new book", 0, 0),
+        ("endpoint", Ref("@", "hall"), "dest", ["a"], ["b"], 0, 0),
     ]
 
 
@@ -307,8 +307,8 @@ def test_endpoint_change_with_a_non_object_on_either_side_still_reconciles_exits
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("endpoint", Ref("@", "hall"), "source", Obj(201), "not a room"),
-        ("endpoint", Ref("@", "hall"), "dest", "not a room", Obj(202)),
+        ("endpoint", Ref("@", "hall"), "source", Obj(201), "not a room", 0, 0),
+        ("endpoint", Ref("@", "hall"), "dest", "not a room", Obj(202), 0, 0),
     ]
 
 

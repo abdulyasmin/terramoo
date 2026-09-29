@@ -240,7 +240,7 @@ def test_endpoint_race_fails_without_changing_or_relinking_the_newer_room():
             self.sent.append(op)
             if op[0] != "endpoint":
                 return [1, 1]
-            _, _, target, _, prop, expected, new = op
+            _, _, target, _, prop, expected, new, *_ = op
             assert prop == "source"
             if self.endpoints[target] != expected:
                 return [0, "E_INVARG", "source changed before endpoint update; replan"]
@@ -277,6 +277,57 @@ def test_endpoint_race_fails_without_changing_or_relinking_the_newer_room():
     ]
     assert w.endpoints[exit_obj] == raced_old
     assert w.members == {planned_old: set(), raced_old: {exit_obj}, desired: set()}
+
+
+def test_exit_reparented_to_non_exit_drops_its_old_room_membership():
+    door, old_source, new_source = Obj(10), Obj(11), Obj(12)
+
+    class ReparentingWorld(FakeWorld):
+        def __init__(self):
+            super().__init__()
+            self.is_exit = True
+            self.endpoint = old_source
+            self.members = {old_source: {door}, new_source: set()}
+
+        def _op(self, op):
+            self.sent.append(op)
+            if op[0] == "chparent":
+                self.is_exit = False
+            elif op[0] == "endpoint":
+                _, _, target, _, _, expected, new, *classifications = op
+                assert target == door and self.endpoint == expected
+                was_exit, will_exit = classifications or (self.is_exit, self.is_exit)
+                if was_exit:
+                    self.members[expected].discard(target)
+                self.endpoint = new
+                if will_exit:
+                    self.members[new].add(target)
+            return [1, 1]
+
+    w = ReparentingWorld()
+    refs = verify_bindings(w, {"door": door, "old_source": old_source, "new_source": new_source})
+    refs.sysrefs = {"exit": Obj(7), "thing": Obj(5)}
+    refs.reindex()
+    want = ObjectDef(
+        key="door", name="Door", parent=Ref("$", "thing"),
+        props=[PropDef("source", Ref("@", "new_source"), defined=False)],
+    )
+    have = ObjectDef(
+        key="door", name="Door", parent=Ref("$", "exit"),
+        props=[PropDef("source", Ref("@", "old_source"), defined=False)],
+    )
+    old_room = ObjectDef(key="old_source", name="Old", parent=Ref("$", "thing"))
+    new_room = ObjectDef(key="new_source", name="New", parent=Ref("$", "thing"))
+    files = {"door": want, "old_source": old_room, "new_source": new_room}
+    live = {"door": have, "old_source": old_room, "new_source": new_room}
+    pending = plan.build(files, live, refs)
+
+    outcome = apply.run(w, pending, refs, files=files, log=lambda _: None)
+
+    assert outcome.failed == []
+    assert [op[0] for op in w.sent] == ["chparent", "endpoint", "link"]
+    assert w.endpoint == new_source
+    assert w.members == {old_source: set(), new_source: set()}
 
 
 def test_orphans_are_only_recycled_when_destroy_is_explicit():

@@ -85,5 +85,6 @@ def test_save_state_is_deterministic_and_uses_raw_object_identifiers(tmp_path):
         "toolbox": 9,
         "registry": {"a": 20, "z": 30},
         "generations": {"a": "gen-a", "z": "gen-z"},
+        "registry_revision": 0,
     }
     assert path.read_text().index('"a"') < path.read_text().index('"z"')

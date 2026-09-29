@@ -92,6 +92,7 @@ def test_destroy_preserves_recycle_callback_registry_changes(offline_moo, tmp_pa
         changes = 'this.toolbox.registry = {{"old", "survivor"}, {this, this.survivor}, {"old-generation", "survivor-generation"}};'
     recycle = [changes, "return 1;"]
     expected_key = "OLD" if callback == "rebind" else "survivor"
+    expected_revision = 1 if callback in ("rebind", "remove") else 2
     initial = '{{"before", "old"}, {after, old}, {"before-generation", "old-generation"}}' if callback == "shift" else '{{"old"}, {old}, {"old-generation"}}'
     script = f""";;
 tool = create(#-1);
@@ -110,7 +111,7 @@ errors = set_verb_code(old, "recycle", {serialize(recycle)});
 if (errors) raise(E_INVARG, toliteral(errors)); endif
 tool.registry = {initial};
 result = tool:tmoo_apply({{{{"destroy", "old", old, "old-generation"}}, {{"register", "after", after, "after-generation"}}}});
-return {{result, tool.registry == {{{{"{expected_key}", "after"}}, {{survivor, after}}, {{"survivor-generation", "after-generation"}}}}, valid(old), valid(survivor), after}};
+return {{result, tool.registry == {{{{"{expected_key}", "after"}}, {{survivor, after}}, {{"survivor-generation", "after-generation"}}, {expected_revision}}}, valid(old), valid(survivor), after}};
 .
 quit
 """
@@ -150,6 +151,7 @@ quit
     assert result.returncode == 0, result.stdout + result.stderr
     reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
     assert reply, result.stdout
+    assert reply[1] != ">>Unknown value<<", result.stdout
     return parse(reply[1])
 
 
@@ -201,6 +203,44 @@ return {result, door.source == old, door in old.exits, door in new.exits};
 """)
     assert result[0][0][:2] == [0, "E_INVARG"]
     assert result[1:] == [1, 1, 0]
+
+
+def test_endpoint_rollback_restores_property_before_guarded_old_membership(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+old = create(#-1);
+new = create(#-1);
+door = create($exit);
+add_property(old, "exits", {door}, {#2, "rw"});
+add_property(new, "exits", {}, {#2, "rw"});
+add_verb(old, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(old, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 0;"});
+add_verb(old, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(old, "add_exit", {"if (args[1].source != this) return 0; endif", "this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(new, "add_exit", {"this.exits = setadd(this.exits, args[1]);", "return 1;"});
+add_verb(new, {#2, "xd", "remove_exit"}, {"this", "none", "this"});
+set_verb_code(new, "remove_exit", {"this.exits = setremove(this.exits, args[1]);", "return 1;"});
+door.source = old;
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+tool.registry = {{"door"}, {door}, {"door-generation"}};
+result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new, 1, 1}});
+return {result, door.source == old, door in old.exits, door in new.exits};
+""")
+    assert result[0][0][:2] == [0, "E_INVARG"]
+    assert result[1:] == [1, 1, 0]
+
+
+def test_rename_revision_rejects_a_stale_interleaved_operation(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, """
+o = create(#-1);
+add_property(o, "_terramoo_generation", "object-generation", {#2, "r"});
+tool.registry = {{"old"}, {o}, {"object-generation"}, 0};
+result = tool:tmoo_apply({{"rename", 1, 0, o, "object-generation", "other"}, {"rename", 1, 0, o, "object-generation", "new"}});
+return {result, tool.registry[1][1], tool.registry[4]};
+""")
+    assert result[0][0][0] == 1
+    assert result[0][1][:2] == [0, "E_INVARG"]
+    assert result[1:] == ["other", 1]
 
 
 def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):

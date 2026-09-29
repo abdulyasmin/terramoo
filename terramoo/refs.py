@@ -21,11 +21,17 @@ class UnresolvedRef(KeyError):
 
 
 class Registry(dict[str, Obj]):
-    """A registry mapping plus the generation nonce stored beside each key."""
+    """A registry mapping, per-key generation nonces and mutation revision."""
 
-    def __init__(self, values=(), generations: dict[str, str | None] | None = None):
+    def __init__(
+        self,
+        values=(),
+        generations: dict[str, str | None] | None = None,
+        revision: int = 0,
+    ):
         super().__init__(values)
         self.generations = dict(generations or {})
+        self.revision = revision
 
     @property
     def legacy_keys(self) -> set[str]:
@@ -39,6 +45,7 @@ class Refs:
     registry: dict[str, Obj] = field(default_factory=dict)
     sysrefs: dict[str, Obj] = field(default_factory=dict)
     generations: dict[str, str | None] = field(default_factory=dict)
+    registry_revision: int = 0
     # Keys a plan is about to create: a `@ref` to one stays a Ref until the
     # create phase has run and the registry knows its number.
     pending: set[str] = field(default_factory=set)
@@ -89,6 +96,7 @@ class Refs:
     def __post_init__(self):
         if isinstance(self.registry, Registry):
             self.generations = dict(self.registry.generations)
+            self.registry_revision = self.registry.revision
         self.reindex()
 
     def registry_key(self, name: str) -> str | None:
@@ -109,10 +117,11 @@ class Refs:
     def replace_registry(self, registry: dict[str, Obj]) -> None:
         self.registry = dict(registry)
         self.generations = dict(getattr(registry, "generations", {}))
+        self.registry_revision = getattr(registry, "revision", 0)
         self.reindex()
 
     def snapshot(self) -> Registry:
-        return Registry(self.registry, self.generations)
+        return Registry(self.registry, self.generations, self.registry_revision)
 
     def reindex(self):
         self._registry_by_name = {}
@@ -144,5 +153,6 @@ def save_state(path: Path, player: Obj, registry: dict[str, Obj], toolbox: Obj |
         "toolbox": toolbox.num if toolbox else None,
         "registry": {k: v.num for k, v in sorted(registry.items())},
         "generations": {k: generations.get(k) for k in sorted(registry)},
+        "registry_revision": getattr(registry, "revision", 0),
     }
     path.write_text(json.dumps(data, indent=2) + "\n")

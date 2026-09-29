@@ -28,7 +28,7 @@ SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 5
+HELPER_VERSION = 6
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 
 # Properties that are the MOO's runtime state rather than the object's
@@ -89,14 +89,21 @@ def find_root() -> Path:
 
 
 def registry_value(raw) -> Registry:
-    """The registry as `tmoo_apply` keeps it: {keys, objects, nonces}.
+    """The registry as `tmoo_apply` keeps it: {keys, objects, nonces, revision}.
 
-    The old two-list shape remains readable so status can explain legacy
-    bindings, but its entries have no verified generation.
+    The old two- and three-list shapes remain readable so status can explain
+    legacy bindings and bootstrap can migrate them on the next mutation.
     """
-    if isinstance(raw, list) and len(raw) in (2, 3) and all(isinstance(x, list) for x in raw):
+    if (
+        isinstance(raw, list)
+        and len(raw) in (2, 3, 4)
+        and all(isinstance(x, list) for x in raw[:3])
+    ):
         keys, objects = raw[:2]
         nonces = raw[2] if len(raw) == 3 else [None] * len(keys)
+        if len(raw) == 4:
+            nonces = raw[2]
+        revision = raw[3] if len(raw) == 4 else 0
         valid_keys = all(isinstance(k, str) for k in keys)
         valid_objects = all(isinstance(o, Obj) for o in objects)
         valid_nonces = all(n is None or isinstance(n, str) for n in nonces)
@@ -112,9 +119,13 @@ def registry_value(raw) -> Registry:
             and unique_keys
             and unique_objects
             and unique_nonces
+            and type(revision) is int
+            and revision >= 0
         ):
             normalized_nonces = [n or None for n in nonces]
-            return Registry(zip(keys, objects), dict(zip(keys, normalized_nonces)))
+            return Registry(
+                zip(keys, objects), dict(zip(keys, normalized_nonces)), revision
+            )
     raise MooError("toolbox has a malformed registry")
 
 
@@ -201,7 +212,10 @@ class World:
 
     # ----- files
 
-    def load_files(self) -> dict[str, ObjectDef]:
+    def load_files(
+        self,
+        snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]] | None = None,
+    ) -> dict[str, ObjectDef]:
         out = {}
         folded: dict[str, str] = {}
         for path in sorted(self.objects_dir.glob("*.moo")):
@@ -210,9 +224,26 @@ class World:
             except MooError as e:
                 raise MooError(f"{path.relative_to(self.root)}: {e}") from None
             try:
-                obj = objdef.parse(path.read_text())
+                if snapshots is None:
+                    obj = objdef.parse(path.read_text())
+                else:
+                    with path.open("rb") as stream:
+                        before = os.fstat(stream.fileno())
+                        data = stream.read()
+                        after = os.fstat(stream.fileno())
+                    current = path.stat()
+                    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    if identity != (
+                        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+                    ) or identity != (
+                        current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns
+                    ):
+                        raise MooError(f"{path.relative_to(self.root)} changed while it was being read")
+                    obj = objdef.parse(data.decode("utf-8"))
             except ValueError as e:  # FormatError and LiteralError are ValueErrors
                 raise MooError(f"{path.relative_to(self.root)}: {e}") from None
+            if snapshots is not None:
+                snapshots[path] = (data, identity)
             if obj.key != path.stem:
                 raise MooError(f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}")
             # MOO string comparison ignores case, and so does the registry.
@@ -318,7 +349,7 @@ class World:
         self._toolbox = tb
         props = self.eval(f"properties({tb})")
         if "registry" not in props:
-            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}}}, {{player, "r"}})')
+            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})')
         for name in HELPER_VERBS:
             code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
             r = self.transport.install_verb(tb, name, code)

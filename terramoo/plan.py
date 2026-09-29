@@ -109,13 +109,21 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
                 continue
         plan.creates.append((target_for(key), parent_arg, obj.name))
 
+    wanted_exits = _exit_classes(files, refs, live=False)
+    current_exits = _exit_classes(
+        {key: obj for key, obj in live.items() if obj is not None}, refs, live=True
+    )
     for key in files:
         if key in broken:
             continue
         obj = files[key]
         current = live_for(key)
         try:
-            ops = diff_object(target_for(key), obj, current, refs)
+            ops = diff_object(
+                target_for(key), obj, current, refs,
+                was_exit=current_exits.get(key.lower(), wanted_exits.get(key.lower(), False)),
+                will_exit=wanted_exits.get(key.lower(), False),
+            )
         except (UnresolvedRef, ValueError) as e:
             plan.problems.append(f"{key}: {e}")
             continue
@@ -156,6 +164,41 @@ def _at_refs(obj: ObjectDef) -> set[str]:
     return found
 
 
+def _exit_classes(objects: dict[str, ObjectDef], refs: Refs, *, live: bool) -> dict[str, bool]:
+    """Classify managed objects from their declared parent chains."""
+    by_name = {key.lower(): obj for key, obj in objects.items()}
+    by_object = {obj: key.lower() for key, obj in refs.registry.items()}
+    exit_class = refs.sysrefs.get("exit")
+    found: dict[str, bool] = {}
+
+    def classify(key: str, stack: set[str]) -> bool:
+        folded = key.lower()
+        if folded in found:
+            return found[folded]
+        if folded in stack or folded not in by_name:
+            return False
+        parent = by_name[folded].parent
+        try:
+            resolved = refs.resolve_ref(parent, live=live)
+        except UnresolvedRef:
+            resolved = None
+        if exit_class is not None and resolved == exit_class:
+            result = True
+        else:
+            parent_key = None
+            if isinstance(parent, Ref) and parent.kind == "@":
+                parent_key = parent.name.lower()
+            elif isinstance(resolved, Obj):
+                parent_key = by_object.get(resolved)
+            result = bool(parent_key and classify(parent_key, stack | {folded}))
+        found[folded] = result
+        return result
+
+    for key in by_name:
+        classify(key, set())
+    return found
+
+
 def _topo(keys: list[str], files: dict[str, ObjectDef]) -> tuple[list[str], set[str]]:
     """`keys` parents first, and the keys whose parent chain is a loop."""
     out, seen, cyclic = [], set(), set()
@@ -181,7 +224,15 @@ def _topo(keys: list[str], files: dict[str, ObjectDef]) -> tuple[list[str], set[
     return out, cyclic
 
 
-def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -> list[tuple]:
+def diff_object(
+    key: str,
+    want: ObjectDef,
+    have: ObjectDef | None,
+    refs: Refs,
+    *,
+    was_exit: bool | None = None,
+    will_exit: bool | None = None,
+) -> list[tuple]:
     """Ops that turn `have` (live) into `want` (file).  Both may carry
     `Ref`s (export symbolizes what it can), so every comparison resolves
     both sides to numbers first.
@@ -190,6 +241,15 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
     target = Ref("@", key)
     ops: list[tuple] = []
     file_ref = refs.resolve_ref
+    exit_class = refs.sysrefs.get("exit")
+    if will_exit is None:
+        will_exit = exit_class is not None and file_ref(want.parent) == exit_class
+    if was_exit is None:
+        was_exit = (
+            have is not None
+            and exit_class is not None
+            and refs.resolve_ref(have.parent, live=True) == exit_class
+        )
 
     def live_ref(v):  # a key being recreated is still its old number on the MOO
         return refs.resolve_ref(v, live=True)
@@ -223,7 +283,7 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
     def reconcile_endpoint(prop: PropDef, prop_name: str, value) -> bool:
         if prop.name.lower() in ("source", "dest"):
             old = refs.resolve(prop.value, live=True)
-            ops.append(("endpoint", target, prop_name, old, value))
+            ops.append(("endpoint", target, prop_name, old, value, int(was_exit), int(will_exit)))
             return True
         return False
 
@@ -248,13 +308,22 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
                 elif p.name != cur.name:
                     ops.append(("propinfo", target, cur.name, [owner, perms, p.name]))
                     prop_name = p.name
-                if value != refs.resolve(cur.value, live=True):
+                if (
+                    value != refs.resolve(cur.value, live=True)
+                    or was_exit != will_exit
+                    and cur.name.lower() in ("source", "dest")
+                ):
                     if not reconcile_endpoint(cur, prop_name, value):
                         ops.append(("setprop", target, prop_name, value))
         else:
             if cur is not None and cur.defined:
                 raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
-            if cur is None or value != refs.resolve(cur.value, live=True):
+            if (
+                cur is None
+                or value != refs.resolve(cur.value, live=True)
+                or was_exit != will_exit
+                and cur.name.lower() in ("source", "dest")
+            ):
                 if cur is None or not reconcile_endpoint(cur, p.name, value):
                     ops.append(("setprop", target, p.name, value))
     for cur in have_props.values():

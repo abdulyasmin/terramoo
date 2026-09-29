@@ -171,7 +171,7 @@ def test_rename_key_atomically_moves_a_legacy_binding(tmp_path, monkeypatch):
     cli.cmd_rename_key(SimpleNamespace(old="bad-key", new="good_key"))
 
     assert moolit.parse(sent[0]) == [
-        ["rename", 1, Obj(10), "generation-10", "good_key"]
+        ["rename", 1, 0, Obj(10), "generation-10", "good_key"]
     ]
     assert raw_registry[0] == ["good_key"]
     assert json.loads(world.state_path.read_text())["registry"] == {"good_key": 10}
@@ -185,20 +185,20 @@ def test_rename_key_renames_an_existing_local_object_file(tmp_path, monkeypatch)
     cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
 
     assert moolit.parse(sent[0]) == [
-        ["rename", 1, Obj(10), "generation-10", "new_key"]
+        ["rename", 1, 0, Obj(10), "generation-10", "new_key"]
     ]
     assert not world.file_for("old_key").exists()
     assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
     assert json.loads(world.state_path.read_text())["registry"] == {"new_key": 10}
 
 
-def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False):
+def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, after_rename=None):
     world = World("test", tmp_path, "alice", {})
     world.objects_dir.mkdir(parents=True)
     world._player = Obj(1)
     world._toolbox = Obj(99)
     world._transport = SimpleNamespace(serialize=moolit.serialize)
-    raw_registry = [[old], [Obj(10)], ["generation-10"]]
+    raw_registry = [[old], [Obj(10)], ["generation-10"], 0]
     sent = []
     monkeypatch.setattr(world, "refs", lambda: Refs(player=Obj(1), registry=registry_value(raw_registry)))
     monkeypatch.setattr(world, "require_helper_version", lambda: None)
@@ -208,7 +208,11 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False):
         text = call[1]
         sent.append(text)
         op = moolit.parse(text)[0]
-        selector, expected, nonce, new = op[1:]
+        if len(op) == 5:
+            selector, expected, nonce, new = op[1:]
+            expected_revision = None
+        else:
+            selector, expected_revision, expected, nonce, new = op[1:]
         if isinstance(selector, int):
             index = selector - 1
         else:  # the pre-fix operation names the old key directly
@@ -217,7 +221,12 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False):
             return [[0, "E_PERM", "reverse refused"]]
         assert raw_registry[1][index] == expected
         assert raw_registry[2][index] == nonce
+        if expected_revision is not None and expected_revision != raw_registry[3]:
+            return [[0, "E_INVARG", "registry key changed before rename; replan"]]
         raw_registry[0][index] = new
+        raw_registry[3] += 1
+        if after_rename is not None:
+            after_rename(world, raw_registry, len(sent))
         return [[1, expected]]
 
     monkeypatch.setattr(world, "eval", rename)
@@ -316,8 +325,124 @@ def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(tmp_path, m
     assert raw_registry[0] == ["hello"]
     assert sent[0].isascii()
     assert moolit.parse(sent[0]) == [
-        ["rename", 1, Obj(10), "generation-10", "hello"],
+        ["rename", 1, 0, Obj(10), "generation-10", "hello"],
     ]
+
+
+def test_rename_key_rejects_an_interleaved_remote_rename(tmp_path, monkeypatch):
+    changed = False
+
+    def interleave(_world, raw_registry, call_number):
+        nonlocal changed
+        if call_number == 1 and not changed:
+            changed = True
+            raw_registry[0][0] = "other"
+            raw_registry[3] += 1
+
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=interleave)
+    # Simulate process B changing only the key immediately before process A's CAS.
+    original_eval = world.eval
+
+    def rename_after_interleave(call):
+        if not changed:
+            raw_registry[0][0] = "other"
+            raw_registry[3] += 1
+        return original_eval(call)
+
+    monkeypatch.setattr(world, "eval", rename_after_interleave)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert raw_registry[0] == ["other"]
+
+
+def test_rename_key_finalizes_after_a_lost_success_response(tmp_path, monkeypatch):
+    journal_was_durable = []
+
+    def lose_response(world, _raw_registry, call_number):
+        if call_number == 1:
+            journal_was_durable.append(
+                world.state_path.with_name("state.json.rename-recovery.json").exists()
+            )
+            raise MooError("connection lost after write")
+
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=lose_response)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert raw_registry[0] == ["new_key"]
+    assert journal_was_durable == [True]
+    assert not world.file_for("old_key").exists()
+    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
+    assert not world.state_path.with_name("state.json.rename-recovery.json").exists()
+
+
+def test_rename_key_preserves_an_edit_made_after_parsing(tmp_path, monkeypatch):
+    edited = ObjectDef(key="old_key", name="Edited concurrently", parent=Obj(2))
+
+    def edit_source(world, _raw_registry, call_number):
+        if call_number == 1:
+            world.file_for("old_key").write_text(objdef.render(edited))
+
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=edit_source)
+    world.write_file(ObjectDef(key="old_key", name="Original", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="changed after it was read.*recovery journal"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert raw_registry[0] == ["old_key"]
+    assert objdef.parse(world.file_for("old_key").read_text()).name == "Edited concurrently"
+    assert world.state_path.with_name("state.json.rename-recovery.json").exists()
+
+
+def test_rename_key_holds_a_per_world_command_lock(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with cli._rename_lock(world):
+        with pytest.raises(MooError, match="another rename-key command"):
+            cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert sent == []
+    assert raw_registry[0] == ["old_key"]
+
+
+def test_rename_key_rejects_case_folded_destination_file_collision(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    world.write_file(ObjectDef(key="NEW_KEY", name="Unrelated", parent=Obj(2)))
+    original_exists = type(world.state_path).exists
+
+    def case_sensitive_exists(path):
+        if path == world.objects_dir / "new_key.moo":
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(type(world.state_path), "exists", case_sensitive_exists)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="NEW_KEY.*differs only in case"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert sent == []
+    assert raw_registry[0] == ["old_key"]
+
+
+def test_rename_key_allows_its_source_file_in_a_case_only_rename(tmp_path, monkeypatch):
+    world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="old_key", new="OLD_KEY"))
+
+    assert sent
+    assert raw_registry[0] == ["OLD_KEY"]
+    assert objdef.parse(world.file_for("OLD_KEY").read_text()).key == "OLD_KEY"
 
 
 def test_pull_skips_legacy_keys_without_building_a_file_path(monkeypatch, capsys):

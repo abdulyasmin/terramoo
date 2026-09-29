@@ -1,6 +1,7 @@
 ":tmoo_apply(ops [, may_suspend]) => one result per op: {1, value} or {0, \"E_NAME\", message}.";
 "Every mutation carries {key, expected object, generation}; the helper verifies it immediately before changing the object.";
-"The registry is {keys, objects, generations}, three parallel lists (no maps: this runs on LambdaMOO 1.8),";
+"The registry is {keys, objects, generations, revision}: three parallel lists and a CAS revision";
+"(no maps: this runs on LambdaMOO 1.8),";
 "and is written back after every change so a crash mid-apply leaves the MOO knowing what it made.";
 if (caller_perms() != this.owner && !caller_perms().wizard)
   raise(E_PERM);
@@ -17,7 +18,9 @@ for op in (ops)
       for ignored in (reg[1])
         nonces = {@nonces, ""};
       endfor
-      reg = {reg[1], reg[2], nonces};
+      reg = {reg[1], reg[2], nonces, 0};
+    elseif (length(reg) == 3)
+      reg = {reg[1], reg[2], reg[3], 0};
     endif
     kind = op[1];
     r = 1;
@@ -58,7 +61,9 @@ for op in (ops)
         for ignored in (reg[1])
           nonces = {@nonces, ""};
         endfor
-        reg = {reg[1], reg[2], nonces};
+        reg = {reg[1], reg[2], nonces, 0};
+      elseif (length(reg) == 3)
+        reg = {reg[1], reg[2], reg[3], 0};
       endif
       j = r in reg[2];
       if (j && reg[1][j] != key)
@@ -74,8 +79,9 @@ for op in (ops)
         reg[2][i] = r;
         reg[3][i] = op[7];
       else
-        reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], op[7]}};
+        reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], op[7]}, reg[4]};
       endif
+      reg[4] = reg[4] + 1;
       this.registry = reg;
     elseif (kind == "register")
       key = op[2];
@@ -99,15 +105,17 @@ for op in (ops)
         reg[2][i] = r;
         reg[3][i] = nonce;
       else
-        reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], nonce}};
+        reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], nonce}, reg[4]};
       endif
+      reg[4] = reg[4] + 1;
       this.registry = reg;
     elseif (kind == "rename")
       i = op[2];
-      o = op[3];
-      nonce = op[4];
-      new_key = op[5];
-      if (typeof(i) != typeof(0) || i < 1 || i > length(reg[1]) || reg[2][i] != o || reg[3][i] != nonce)
+      expected_revision = op[3];
+      o = op[4];
+      nonce = op[5];
+      new_key = op[6];
+      if (typeof(i) != typeof(0) || i < 1 || i > length(reg[1]) || reg[4] != expected_revision || reg[2][i] != o || reg[3][i] != nonce)
         raise(E_INVARG, "registry binding changed before rename");
       endif
       old_key = reg[1][i];
@@ -119,6 +127,7 @@ for op in (ops)
         raise(E_INVARG, tostr("key ", reg[1][j], " is already registered as ", reg[2][j]));
       endif
       reg[1][i] = new_key;
+      reg[4] = reg[4] + 1;
       this.registry = reg;
       r = o;
     elseif (kind == "destroy")
@@ -149,7 +158,9 @@ for op in (ops)
           for ignored in (reg[1])
             nonces = {@nonces, ""};
           endfor
-          reg = {reg[1], reg[2], nonces};
+          reg = {reg[1], reg[2], nonces, 0};
+        elseif (length(reg) == 3)
+          reg = {reg[1], reg[2], reg[3], 0};
         endif
         i = key in reg[1];
       endif
@@ -157,7 +168,7 @@ for op in (ops)
         if (reg[2][i] != o || reg[3][i] != nonce)
           raise(E_INVARG, tostr("key ", reg[1][i], " changed during recycle"));
         endif
-        reg = {listdelete(reg[1], i), listdelete(reg[2], i), listdelete(reg[3], i)};
+        reg = {listdelete(reg[1], i), listdelete(reg[2], i), listdelete(reg[3], i), reg[4] + 1};
         this.registry = reg;
       endif
     elseif (kind == "link")
@@ -242,14 +253,20 @@ for op in (ops)
         if (current != expected)
           raise(E_INVARG, tostr(prop, " changed before endpoint update; replan"));
         endif
-        exit_class = `$exit ! ANY => #-1';
-        is_exit = 0;
-        a = valid(o) && valid(exit_class) ? o | #-1;
-        while (valid(a) && !is_exit)
-          is_exit = a == exit_class;
-          a = parent(a);
-        endwhile
-        if (!is_exit)
+        if (length(op) >= 9)
+          was_exit = op[8];
+          will_exit = op[9];
+        else
+          exit_class = `$exit ! ANY => #-1';
+          was_exit = 0;
+          a = valid(o) && valid(exit_class) ? o | #-1;
+          while (valid(a) && !was_exit)
+            was_exit = a == exit_class;
+            a = parent(a);
+          endwhile
+          will_exit = was_exit;
+        endif
+        if (!was_exit && !will_exit)
           "An ordinary source/dest property is only a compare-and-set update.";
           o.(prop) = new;
         else
@@ -261,8 +278,10 @@ for op in (ops)
           removed_old = 0;
           removing_old = 0;
           try
-            "Add first: refusal cannot strand the exit after its endpoint changed.";
-            if (valid(new_room) && new_room != old_room)
+            "Callbacks may require the endpoint to name their room.";
+            o.(prop) = new;
+            changed_prop = 1;
+            if (will_exit && valid(new_room) && (!was_exit || new_room != old_room))
               if (prop == "source" && !(o in `new_room.exits ! ANY => {}'))
                 adding_new = 1;
                 callback_result = new_room:add_exit(o);
@@ -284,13 +303,11 @@ for op in (ops)
               if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
                 raise(E_INVARG, tostr("key ", key, " changed during endpoint update"));
               endif
-              if (o.(prop) != expected)
+              if (o.(prop) != new)
                 raise(E_INVARG, tostr(prop, " changed during endpoint update; replan"));
               endif
             endif
-            o.(prop) = new;
-            changed_prop = 1;
-            if (valid(old_room) && old_room != new_room)
+            if (was_exit && valid(old_room) && (!will_exit || old_room != new_room))
               if (prop == "source" && o in `old_room.exits ! ANY => {}')
                 removing_old = 1;
                 callback_result = old_room:remove_exit(o);
@@ -324,29 +341,64 @@ for op in (ops)
             if (removing_old && !removed_old)
               removed_old = prop == "source" ? !(o in `old_room.exits ! ANY => {}') | !(o in `old_room.entrances ! ANY => {}');
             endif
-            if (removed_old)
+            restored_prop = !changed_prop;
+            if (changed_prop)
+              current = `o.(prop) ! ANY => E_NONE';
+              if (current == expected)
+                restored_prop = 1;
+              elseif (current == new)
+                try
+                  o.(prop) = expected;
+                  restored_prop = 1;
+                except rollback_error (ANY)
+                  rollback = tostr(rollback, " could not restore ", prop, ";");
+                endtry
+              else
+                rollback = tostr(rollback, " ", prop, " changed again before rollback;");
+              endif
+            endif
+            restored_old = !removed_old;
+            if (restored_prop && removed_old)
               if (prop == "source")
                 callback_result = `old_room:add_exit(o) ! ANY => 0';
                 if (!callback_result || !(o in `old_room.exits ! ANY => {}'))
                   rollback = tostr(rollback, " could not restore old exits membership;");
+                  restored_old = 0;
+                else
+                  restored_old = 1;
                 endif
               else
                 callback_result = `old_room:add_entrance(o) ! ANY => 0';
                 if (!callback_result || !(o in `old_room.entrances ! ANY => {}'))
                   rollback = tostr(rollback, " could not restore old entrances membership;");
+                  restored_old = 0;
+                else
+                  restored_old = 1;
                 endif
               endif
             endif
-            if (changed_prop && o.(prop) == new)
+            if (restored_prop && !restored_old)
+              rolled_forward = 0;
               try
-                o.(prop) = expected;
+                o.(prop) = new;
+                rolled_forward = 1;
               except rollback_error (ANY)
-                rollback = tostr(rollback, " could not restore ", prop, ";");
+                rollback = tostr(rollback, " could not return to new ", prop, ";");
               endtry
-            elseif (changed_prop && o.(prop) != expected)
-              rollback = tostr(rollback, " ", prop, " changed again before rollback;");
+              if (rolled_forward && will_exit && valid(new_room))
+                if (prop == "source" && !(o in `new_room.exits ! ANY => {}'))
+                  callback_result = `new_room:add_exit(o) ! ANY => 0';
+                  added_new = o in `new_room.exits ! ANY => {}';
+                elseif (prop == "dest" && !(o in `new_room.entrances ! ANY => {}'))
+                  callback_result = `new_room:add_entrance(o) ! ANY => 0';
+                  added_new = o in `new_room.entrances ! ANY => {}';
+                endif
+                if (!added_new)
+                  rollback = tostr(rollback, " could not restore new room membership;");
+                endif
+              endif
             endif
-            if (added_new)
+            if (restored_prop && restored_old && added_new)
               if (prop == "source")
                 callback_result = `new_room:remove_exit(o) ! ANY => 0';
                 if (!callback_result || o in `new_room.exits ! ANY => {}')

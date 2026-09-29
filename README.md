@@ -118,7 +118,8 @@ world; `override` is the one keyword of ours.
   `tmoo bootstrap` after upgrading terramoo to install updated helpers.
   Export, adoption and apply check the installed helper version and give that
   bootstrap instruction before sending an incompatible request.
-- The toolbox holds the *registry*, `key -> {#nnn, generation nonce}`. The
+- The toolbox holds the *registry*, `key -> {#nnn, generation nonce}`, plus a
+  registry-wide revision used to compare-and-set key renames. The
   same protected nonce is stored on the object and ignored by exports, so a
   recycled and reused object number cannot impersonate the managed object. It
   lives in the MOO, so a
