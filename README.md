@@ -48,6 +48,7 @@ tls = false
 # [connection] for a hosted MCP gate:
 #   transport = "mcp"
 #   url = "https://moo.example.org/mcp"
+#   dialect = "moor"       when the gate fronts mooR rather than LambdaMOO/ToastStunt
 #   eval_tool = "eval"    set_verb_tool = "set_verb"    set_prop_tool = "set_prop"
 
 [core]
@@ -88,7 +89,8 @@ endobject
 - `property` defines a property on this object; `override` sets the value
   of one inherited from an ancestor. An inherited property with no
   `override` is clear.
-- Values are MOO literals. `$name` is a corified object (`#0.name`),
+- Values use mooR's MOO-literal escapes (including `\n`, `\xNN` and
+  `\uNNNN`). `$name` is a corified object (`#0.name`),
   `@name` an object this world manages, `@me` the player. Anything else the
   MOO refers to by number stays a number. mooR's symbols (`'name`) and UUID
   objects (`#048D05-1234567890`) read and write as themselves.
@@ -136,8 +138,8 @@ world; `override` is the one keyword of ours.
   cores. The telnet transport logs in again when it finds its connection
   gone between requests (never in the middle of one), but two `tmoo`
   processes on one world will keep knocking each other off.
-- Strings containing a newline can't be sent over telnet, because MOO
-  literals have no newline escape.
+- Strings containing a newline can be sent to mooR. LambdaMOO and ToastStunt
+  have no newline escape, so their telnet transports reject such values.
 
 ## Testbeds and tests
 

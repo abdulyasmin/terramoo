@@ -17,7 +17,7 @@ from pathlib import Path
 from . import objdef
 from .errors import MooError
 from .model import ObjectDef
-from .moolit import Err, Obj, serialize
+from .moolit import Err, Obj
 from .refs import Refs, save_state
 from .secrets import secret_for
 from .transport import Transport, connect
@@ -237,7 +237,7 @@ class World:
     def names(self, objs: list[Obj]) -> list[str]:
         if not objs:
             return []
-        return [name for _, _, name in self.eval(self.helper("tmoo_info", serialize(objs)))]
+        return [name for _, _, name in self.eval(self.helper("tmoo_info", self.transport.serialize(objs)))]
 
     def bootstrap(self, log=print) -> Obj:
         """Find or create the toolbox and (re)install the helper verbs."""

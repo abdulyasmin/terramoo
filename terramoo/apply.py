@@ -35,11 +35,12 @@ def _resolve_op(op: tuple, refs: Refs) -> list:
 def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> None:
     batch, batch_labels, size = [], [], 0
     limit = world.transport.batch_bytes
+    dialect = getattr(world.transport, "literal_dialect", moolit.LAMBDA)
 
     def flush():
         if not batch:
             return
-        results = world.eval(world.helper("tmoo_apply", moolit.serialize(batch)))
+        results = world.eval(world.helper("tmoo_apply", moolit.serialize(batch, dialect=dialect)))
         if not isinstance(results, list):
             why = f"malformed helper result list: {results!r}"
             for label in batch_labels:
@@ -65,7 +66,7 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
         batch_labels.clear()
 
     for op, label in zip(ops, labels):
-        text = moolit.serialize(op)
+        text = moolit.serialize(op, dialect=dialect)
         if batch and size + len(text) > limit:
             flush()
             size = 0

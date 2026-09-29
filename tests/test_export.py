@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import cli, export as export_mod, moolit
+from terramoo import cli, export as export_mod, moolit, objdef
 from terramoo.errors import MooError
 from terramoo.model import PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
@@ -98,6 +98,61 @@ def test_export_rejects_a_malformed_nested_property_literal():
 
     with pytest.raises(MooError, match=r"hall property 'bad'.*unexpected"):
         export_mod.export(world, refs, ["hall"])
+
+
+def test_export_rejects_an_oversized_integer_property_literal():
+    obj = Obj(10)
+    record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rc", "9" * 5_000]], []]
+    world = ExportWorld({obj: record})
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    with pytest.raises(MooError, match=r"hall property 'bad'.*malformed literal"):
+        export_mod.export(world, refs, ["hall"])
+
+
+@pytest.mark.parametrize(
+    "record, expected",
+    [
+        ([Obj(10), "Hall\nshutdown", Obj(0), Obj(-1), Obj(1), "", [], []], "malformed record"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "r\n", [], []], "malformed record"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad\rname", 1, Obj(1), "rc", "1"]], []], "malformed property"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rz", "1"]], []], "malformed property"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [[" \t", Obj(1), "rd", ["this", "none", "this"], []]]], "malformed fields"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rz", ["this", "none", "this"], []]]], "malformed fields"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["", "none", "this"], []]]], "malformed fields"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["other", "none", "this"], []]]], "malformed fields"),
+        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["this", "none", "this"], ["return 1;\nshutdown();"]]]], "malformed fields"),
+    ],
+)
+def test_export_rejects_fields_that_cannot_be_rendered_as_lines(record, expected):
+    obj = Obj(10)
+    world = ExportWorld({obj: record})
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    with pytest.raises(MooError, match=expected):
+        export_mod.export(world, refs, ["hall"])
+
+
+def test_valid_export_record_renders_and_parses_round_trip():
+    obj = Obj(10)
+    record = [
+        obj,
+        "Hé",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "rf",
+        [["greeting", 1, Obj(1), "rc", r'"hello\nworld"']],
+        [["look inspect", Obj(1), "rd", ["this", "none", "this"], ["return 1;"]]],
+    ]
+    world = ExportWorld({obj: record})
+    world.transport = SimpleNamespace(literal_dialect=moolit.MOOR)
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    exported = export_mod.export(world, refs, ["hall"])["hall"]
+
+    assert exported.props[0].value == "hello\nworld"
+    assert objdef.parse(objdef.render(exported)) == exported
 
 
 def test_malformed_nested_verb_code_never_reaches_the_writer():

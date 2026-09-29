@@ -7,8 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from terramoo import export as export_mod
 from terramoo.errors import MooError
 from terramoo.moolit import Obj
+from terramoo.refs import Refs
 from terramoo.transport.telnet import IAC, WILL, Telnet, _Wire
 
 TAG = re.compile(r"(~[A-Za-z0-9]{10}~)")
@@ -184,12 +186,11 @@ def test_truncated_unicode_answer_is_rejected(monkeypatch):
             return [tag + "Z"]
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
-        # A complete mooR literal `"éa"` has four characters.  Its truncated
-        # prefix happens to occupy four UTF-8 bytes, which is not enough.
-        return [tag + "S", tag + "B4", tag + "C1", tag + 'D"é"', tag + "E"]
+        # mooR quote_str emits `"\u00E9a"`; this frame lost the `a`.
+        return [tag + "S", tag + "B9", tag + "C1", tag + r'D"\u00E9"', tag + "E"]
 
     t = client(monkeypatch, FakeMoo(reply))
-    with pytest.raises(MooError, match="declared 4"):
+    with pytest.raises(MooError, match="declared 9"):
         t.eval("anything")
 
 
@@ -202,18 +203,20 @@ def test_multiline_expressions_are_rejected_before_they_reach_the_wire(expressio
         t._request(expression, 1)
 
 
-@pytest.mark.parametrize("declared", [3, 4])
-def test_declared_length_may_count_characters_or_utf8_bytes(monkeypatch, declared):
-    # mooR counts '"é"' as 3 characters; LambdaMOO and ToastStunt as 4 bytes.
-    def reply(tag, line):
-        if tag is None:
-            return []
-        if is_sentinel(tag, line):
-            return [tag + "Z"]
-        if "_r = (player)" in line:
-            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
-        unit = 1 if declared == 3 else 2
-        return [tag + "S", tag + f"B{declared}", tag + f"C{unit}", tag + 'D"é"', tag + "E"]
+def test_moor_escaped_nested_export_record_uses_moor_dialect(monkeypatch):
+    literal = (
+        r'{{#10, "H\u00E9", #0, #-1, #1, "", '
+        r'{{"greeting", 1, #1, "rc", "\"\\u0645\\n\""}}, {}}}'
+    )
+    transport = client(monkeypatch, FakeMoo(answer(literal, chunk=13)))
+    world = SimpleNamespace(
+        transport=transport,
+        ignore_props=set(),
+        helper=lambda verb, arg: arg,
+        eval=transport.eval,
+    )
 
-    t = client(monkeypatch, FakeMoo(reply))
-    assert t.eval("anything") == "é"
+    obj = export_mod.export(world, Refs(player=Obj(1), registry={"hall": Obj(10)}), ["hall"])["hall"]
+
+    assert obj.name == "Hé"
+    assert obj.props[0].value == "م\n"

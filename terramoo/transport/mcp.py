@@ -23,7 +23,8 @@ _TAGGED = re.compile(r"(.*\S)\s+\((?:OBJ|ERR|ANON|WAIF|STR)\)", re.S)
 
 class McpTransport(Transport):
     def __init__(self, url: str, token: str, *, eval_tool: str = "eval", set_verb_tool: str | None = "set_verb",
-                 set_prop_tool: str | None = "set_prop", timeout: float = 90.0, batch_bytes: int = 24_000):
+                 set_prop_tool: str | None = "set_prop", timeout: float = 90.0, batch_bytes: int = 24_000,
+                 dialect: str = moolit.LAMBDA):
         self.url = url
         self.token = token
         self.eval_tool = eval_tool
@@ -31,13 +32,14 @@ class McpTransport(Transport):
         self.set_prop_tool = set_prop_tool or None
         self.timeout = timeout
         self.batch_bytes = batch_bytes
+        self.literal_dialect = moolit._dialect(dialect)
         self._id = 0
 
     @classmethod
     def from_config(cls, conn: dict, secret: str) -> "McpTransport":
         if "url" not in conn:
             raise MooError("an mcp connection needs `url`")
-        keys = ("eval_tool", "set_verb_tool", "set_prop_tool", "timeout", "batch_bytes")
+        keys = ("eval_tool", "set_verb_tool", "set_prop_tool", "timeout", "batch_bytes", "dialect")
         return cls(conn["url"], secret, **{k: conn[k] for k in keys if k in conn})
 
     def rpc(self, method: str, params: dict) -> dict:
@@ -111,19 +113,19 @@ class McpTransport(Transport):
         if not isinstance(literal, str):
             raise MooError(f"eval returned something that is not a toliteral() string: {text[:200]}")
         try:
-            return moolit.parse(literal)
+            return moolit.parse(literal, dialect=self.literal_dialect)
         except moolit.LiteralError as e:
             raise MooError(f"cannot read the MOO's answer ({e}): {literal[:200]}") from None
 
     def set_prop(self, obj, name: str, value) -> None:
         if not self.set_prop_tool:
             return super().set_prop(obj, name, value)
-        self.call_tool(self.set_prop_tool, {"object": str(obj), "prop": name, "value": moolit.serialize(value)})
+        self.call_tool(self.set_prop_tool, {"object": str(obj), "prop": name, "value": self.serialize(value)})
 
     def install_verb(self, obj, name, lines, *, perms="rxd", args=("this", "none", "this")) -> str:
         if not self.set_verb_tool:
             return super().install_verb(obj, name, lines, perms=perms, args=args)
-        exists = self.eval(f"{moolit.escape(name)} in verbs({obj})")
+        exists = self.eval(f"{self.escape(name)} in verbs({obj})")
         dobj, prep, iobj = args
         call = {"object": str(obj), "verb": name, "code": "\n".join(lines),
                 "permissions": perms, "dobj": dobj, "prep": prep, "iobj": iobj}

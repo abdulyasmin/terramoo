@@ -235,7 +235,7 @@ class Telnet(Transport):
     def program(self, tag: str, expression: str) -> str:
         """The one line of MOO that evaluates `expression` and reports it under `tag`."""
         n = self.chunk
-        q = moolit.escape
+        q = self.escape
         return (
             f"{self.eval_prefix}{self._tell(q(tag + 'S'))}; "
             f"try _r = ({expression}); _v = toliteral(_r); "
@@ -257,7 +257,7 @@ class Telnet(Transport):
         wire = self._wire
         tag = "~" + "".join(random.choices(string.ascii_letters + string.digits, k=10)) + "~"
         wire.send_line(self.program(tag, expression))
-        wire.send_line(f"{self.eval_prefix}{self._tell(moolit.escape(tag + 'Z'))}")
+        wire.send_line(f"{self.eval_prefix}{self._tell(self.escape(tag + 'Z'))}")
         started = sentinel = False
         chunks: list[bytes] = []
         expected_length: int | None = None
@@ -319,6 +319,10 @@ class Telnet(Transport):
                             if expected_length != received:
                                 outcome = ("P", f"the MOO declared {expected_length} {unit} but received {received}")
                             else:
+                                if length_unit == 1:
+                                    self.literal_dialect = moolit.MOOR
+                                elif length_unit == 2:
+                                    self.literal_dialect = moolit.LAMBDA
                                 outcome = (kind, text)
                 if sentinel:
                     break
@@ -341,12 +345,12 @@ class Telnet(Transport):
             raise MooError(text)
         if kind == "X":
             try:
-                code, msg = moolit.parse(text)
+                code, msg = moolit.parse(text, dialect=self.literal_dialect)
             except ValueError:
                 raise MooError(text) from None
             raise MooError(f"{code}: {msg}")
         try:
-            return moolit.parse(text)
+            return moolit.parse(text, dialect=self.literal_dialect)
         except moolit.LiteralError as e:
             raise MooError(f"cannot read the MOO's answer ({e}): {text[:200]}") from None
 

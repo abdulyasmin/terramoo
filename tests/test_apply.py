@@ -28,7 +28,7 @@ class FakeWorld:
 
     def eval(self, call):
         verb, text = call
-        value = moolit.parse(text)
+        value = moolit.parse(text, dialect=getattr(self.transport, "literal_dialect", moolit.LAMBDA))
 
         def no_refs(v):
             if isinstance(v, Ref):  # the MOO has no @key syntax
@@ -128,6 +128,25 @@ def test_ops_are_split_before_the_configured_batch_limit():
     outcome = apply.run(w, plan.Plan(ops=ops), refs, files={}, log=lambda _: None)
     assert outcome.failed == []
     assert w.batches == [[["name", hall, "A"]], [["name", hall, "B"]]]
+
+
+def test_apply_encodes_strings_for_the_moor_dialect():
+    hall = Obj(200)
+    w = FakeWorld()
+    w.registry = {"hall": hall}
+    w.transport.literal_dialect = moolit.MOOR
+    refs = Refs(player=ME, registry={"hall": hall})
+
+    outcome = apply.run(
+        w,
+        plan.Plan(ops=[("name", Ref("@", "hall"), "Hé\n")]),
+        refs,
+        files={},
+        log=lambda _: None,
+    )
+
+    assert outcome.failed == []
+    assert w.sent == [["name", hall, "Hé\n"]]
 
 
 def test_a_short_result_list_is_reported_and_state_is_still_saved():

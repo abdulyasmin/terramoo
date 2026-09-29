@@ -161,3 +161,13 @@ def test_tool_errors_and_set_prop_payloads_are_preserved():
             {"object": "#9", "prop": 'odd "name', "value": moolit.serialize([Obj(2), "value"])},
         )
     ]
+
+
+def test_moor_dialect_is_used_for_mcp_set_prop_literals():
+    sent = []
+    t = McpTransport("https://moo.example/mcp", "token", dialect="moor")
+    t.call_tool = lambda name, arguments: sent.append((name, arguments)) or "ok"
+
+    t.set_prop(Obj(9), "greeting", "Hé\n")
+
+    assert sent[-1][1]["value"] == r'"H\u00E9\n"'

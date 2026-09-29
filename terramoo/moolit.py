@@ -65,6 +65,11 @@ class LiteralError(ValueError):
     pass
 
 
+LAMBDA = "lambda"
+MOOR = "moor"
+_DIALECTS = {LAMBDA, MOOR}
+
+
 _TOKEN = re.compile(
     r"""
     (?P<ws>\s+)
@@ -97,28 +102,73 @@ def _tokens(text: str):
     yield "eof", ""
 
 
-def parse(text: str):
-    """Parse one MOO literal; the whole of `text` must be that literal."""
-    toks = list(_tokens(text))
-    value, i = _parse_at(toks, 0)
-    if toks[i][0] != "eof":
-        raise LiteralError(f"trailing text after literal: {toks[i][1]!r}")
+def _dialect(value: str) -> str:
+    if value not in _DIALECTS:
+        raise ValueError(f"unknown MOO literal dialect {value!r}")
     return value
 
 
-def _unescape(s: str) -> str:
-    """A string token's contents: a backslash quotes the next character."""
-    return re.sub(r"\\(.)", r"\1", s[1:-1])
+def parse(text: str, *, dialect: str = LAMBDA):
+    """Parse one MOO literal; the whole of `text` must be that literal."""
+    dialect = _dialect(dialect)
+    try:
+        toks = list(_tokens(text))
+        value, i = _parse_at(toks, 0, dialect)
+        if toks[i][0] != "eof":
+            raise LiteralError(f"trailing text after literal: {toks[i][1]!r}")
+        return value
+    except LiteralError:
+        raise
+    except (TypeError, ValueError, OverflowError) as e:
+        raise LiteralError(str(e)) from None
 
 
-def _parse_at(toks, i):
+def _unescape(s: str, dialect: str) -> str:
+    """Decode a string token using the selected server's escape rules."""
+    if dialect == LAMBDA:
+        return re.sub(r"\\(.)", r"\1", s[1:-1])
+
+    out = []
+    body = s[1:-1]
+    i = 0
+    simple = {'"': '"', "'": "'", "\\": "\\", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+    while i < len(body):
+        c = body[i]
+        if c != "\\":
+            out.append(c)
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):
+            raise LiteralError("unexpected end of string escape")
+        escape = body[i]
+        i += 1
+        if escape in simple:
+            out.append(simple[escape])
+            continue
+        digits = 2 if escape == "x" else 4 if escape == "u" else 0
+        if not digits:
+            out.append(escape)  # mooR keeps LambdaMOO's unknown-escape behavior
+            continue
+        encoded = body[i:i + digits]
+        if len(encoded) != digits or not all(c in "0123456789abcdefABCDEF" for c in encoded):
+            raise LiteralError(f"invalid \\{escape} escape")
+        codepoint = int(encoded, 16)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise LiteralError(f"invalid \\{escape} escape")
+        out.append(chr(codepoint))
+        i += digits
+    return "".join(out)
+
+
+def _parse_at(toks, i, dialect):
     kind, text = toks[i]
     if kind == "int":
         return int(text), i + 1
     if kind == "float":
         return float(text), i + 1
     if kind == "str":
-        return _unescape(text), i + 1
+        return _unescape(text, dialect), i + 1
     if kind == "obj":
         ident = text[1:]
         return Obj(ident if "-" in ident[1:] else int(ident)), i + 1
@@ -138,7 +188,7 @@ def _parse_at(toks, i):
         if toks[i] == ("punct", "}"):
             return items, i + 1
         while True:
-            v, i = _parse_at(toks, i)
+            v, i = _parse_at(toks, i, dialect)
             items.append(v)
             if toks[i] == ("punct", ","):
                 i += 1
@@ -152,10 +202,10 @@ def _parse_at(toks, i):
         if toks[i] == ("punct", "]"):
             return m, i + 1
         while True:
-            k, i = _parse_at(toks, i)
+            k, i = _parse_at(toks, i, dialect)
             if toks[i][0] != "arrow":
                 raise LiteralError(f"expected -> in map, got {toks[i][1]!r}")
-            v, i = _parse_at(toks, i + 1)
+            v, i = _parse_at(toks, i + 1, dialect)
             m[tuple(k) if isinstance(k, list) else k] = v
             if toks[i] == ("punct", ","):
                 i += 1
@@ -166,13 +216,32 @@ def _parse_at(toks, i):
     raise LiteralError(f"unexpected {text!r}")
 
 
-def escape(s: str) -> str:
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+def escape(s: str, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str:
+    """Quote `s` as a string literal.  `raw_unicode` keeps printable non-ASCII
+    characters as themselves in mooR literals (object files are UTF-8; only
+    text bound for the server needs `\\uNNNN`)."""
+    dialect = _dialect(dialect)
+    if dialect == LAMBDA:
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    out = ['"']
+    special = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\0": "\\0"}
+    for c in s:
+        if c in special:
+            out.append(special[c])
+        elif ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F:
+            out.append(f"\\x{ord(c):02X}")
+        elif not raw_unicode and not c.isascii() and ord(c) <= 0xFFFF:
+            out.append(f"\\u{ord(c):04X}")
+        else:
+            out.append(c)
+    out.append('"')
+    return "".join(out)
 
 
-def serialize(value) -> str:
+def serialize(value, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str:
     """Render a value as MOO source text.  `Ref`s are rendered as spelled;
     resolve them first (`refs.resolve`) if the text is going to the MOO."""
+    dialect = _dialect(dialect)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -180,13 +249,17 @@ def serialize(value) -> str:
     if isinstance(value, float):
         return repr(value)  # always has a point or an exponent, as MOO needs
     if isinstance(value, str):
-        return escape(value)
+        return escape(value, dialect=dialect, raw_unicode=raw_unicode)
     if isinstance(value, (Obj, Err, Ref, Sym)):
         return str(value)
     if isinstance(value, Map):
-        return "[" + ", ".join(f"{serialize(k)} -> {serialize(v)}" for k, v in value.items()) + "]"
+        return "[" + ", ".join(
+            f"{serialize(k, dialect=dialect, raw_unicode=raw_unicode)} -> "
+            f"{serialize(v, dialect=dialect, raw_unicode=raw_unicode)}"
+            for k, v in value.items()
+        ) + "]"
     if isinstance(value, (list, tuple)):
-        return "{" + ", ".join(serialize(v) for v in value) + "}"
+        return "{" + ", ".join(serialize(v, dialect=dialect, raw_unicode=raw_unicode) for v in value) + "}"
     raise LiteralError(f"cannot serialize {type(value).__name__}")
 
 

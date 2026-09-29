@@ -16,6 +16,7 @@ from .model import ObjectDef, PropDef, VerbDef
 from .moolit import Obj, Ref
 
 CODE_INDENT = "    "
+LITERAL_DIALECT = moolit.MOOR
 
 
 class FormatError(ValueError):
@@ -35,14 +36,14 @@ def _parse_ref(text: str):
     text = text.strip()
     if text in ("none", "nothing"):
         return Obj(-1)
-    v = moolit.parse(text)
+    v = moolit.parse(text, dialect=LITERAL_DIALECT)
     if not isinstance(v, (Obj, Ref)):
         raise FormatError(f"expected an object reference, got {text!r}")
     return v
 
 
 def _quoted(text: str) -> str:
-    v = moolit.parse(text)
+    v = moolit.parse(text, dialect=LITERAL_DIALECT)
     if not isinstance(v, str):
         raise FormatError(f"expected a string, got {text!r}")
     return v
@@ -104,7 +105,7 @@ def parse(text: str) -> ObjectDef:
                 obj.props.append(
                     PropDef(
                         name=pm.group(1) or pm.group(2),
-                        value=moolit.parse(pm.group(4)),
+                        value=moolit.parse(pm.group(4), dialect=LITERAL_DIALECT),
                         perms=_quoted(opts["flags"]) if "flags" in opts else "rc",
                         owner=_parse_ref(opts["owner"]) if "owner" in opts else None,
                     )
@@ -113,7 +114,11 @@ def parse(text: str) -> ObjectDef:
             om = _OVERRIDE_RE.match(stmt)
             if om:
                 obj.props.append(
-                    PropDef(name=om.group(1) or om.group(2), value=moolit.parse(om.group(3)), defined=False)
+                    PropDef(
+                        name=om.group(1) or om.group(2),
+                        value=moolit.parse(om.group(3), dialect=LITERAL_DIALECT),
+                        defined=False,
+                    )
                 )
                 continue
             raise FormatError(f"line {i}: bad property line")
@@ -194,31 +199,35 @@ def _read_statement(lines: list[str], i: int) -> tuple[str, int]:
 
 
 def _ident_or_quoted(name: str) -> str:
-    return name if re.fullmatch(_IDENT, name) else moolit.escape(name)
+    return name if re.fullmatch(_IDENT, name) else moolit.escape(name, dialect=LITERAL_DIALECT, raw_unicode=True)
 
 
 def _render_value(value) -> str:
     """Lists of strings (descriptions, help text) go one element per line so
     diffs stay line-sized; everything else stays on one line."""
     if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
-        inner = ",\n".join("    " + moolit.escape(v) for v in value)
+        inner = ",\n".join("    " + moolit.escape(v, dialect=LITERAL_DIALECT, raw_unicode=True) for v in value)
         return "{\n" + inner + "\n  }"
-    return moolit.serialize(value)
+    return moolit.serialize(value, dialect=LITERAL_DIALECT, raw_unicode=True)
 
 
 def render(obj: ObjectDef) -> str:
-    out = [f"object {obj.key}", f"  name: {moolit.escape(obj.name)}", f"  parent: {obj.parent}"]
+    out = [
+        f"object {obj.key}",
+        f"  name: {moolit.escape(obj.name, dialect=LITERAL_DIALECT, raw_unicode=True)}",
+        f"  parent: {obj.parent}",
+    ]
     if obj.location != Obj(-1):
         out.append(f"  location: {obj.location}")
     if obj.owner is not None:
         out.append(f"  owner: {obj.owner}")
     if obj.flags:
-        out.append(f"  flags: {moolit.escape(obj.flags)}")
+        out.append(f"  flags: {moolit.escape(obj.flags, dialect=LITERAL_DIALECT, raw_unicode=True)}")
     if obj.props:
         out.append("")
     for p in obj.props:
         if p.defined:
-            opts = f"flags: {moolit.escape(p.perms)}"
+            opts = f"flags: {moolit.escape(p.perms, dialect=LITERAL_DIALECT, raw_unicode=True)}"
             if p.owner is not None:
                 opts += f", owner: {p.owner}"
             out.append(f"  property {_ident_or_quoted(p.name)} ({opts}) = {_render_value(p.value)};")
@@ -226,7 +235,10 @@ def render(obj: ObjectDef) -> str:
             out.append(f"  override {_ident_or_quoted(p.name)} = {_render_value(p.value)};")
     for v in obj.verbs:
         out.append("")
-        head = f"  verb {_ident_or_quoted(v.names)} ({v.args[0]} {v.args[1]} {v.args[2]}) flags: {moolit.escape(v.perms)}"
+        head = (
+            f"  verb {_ident_or_quoted(v.names)} ({v.args[0]} {v.args[1]} {v.args[2]}) "
+            f"flags: {moolit.escape(v.perms, dialect=LITERAL_DIALECT, raw_unicode=True)}"
+        )
         if v.owner is not None:
             head += f" owner: {v.owner}"
         out.append(head)

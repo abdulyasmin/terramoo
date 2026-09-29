@@ -19,6 +19,7 @@ class Transport:
     can_suspend = False
     #: Characters of expression text per call (a batch of apply ops).
     batch_bytes = 24_000
+    literal_dialect = moolit.LAMBDA
 
     def eval(self, expression: str):
         raise NotImplementedError
@@ -26,21 +27,27 @@ class Transport:
     def close(self) -> None:
         pass
 
+    def escape(self, value: str) -> str:
+        return moolit.escape(value, dialect=self.literal_dialect)
+
+    def serialize(self, value) -> str:
+        return moolit.serialize(value, dialect=self.literal_dialect)
+
     def set_prop(self, obj, name: str, value) -> None:
         """Set a property; an assignment, which is still an expression."""
-        self.eval(f"{obj}.({moolit.escape(name)}) = {moolit.serialize(value)}")
+        self.eval(f"{obj}.({self.escape(name)}) = {self.serialize(value)}")
 
     def install_verb(self, obj, name: str, lines: list[str], *, perms: str = "rxd",
                      args: tuple[str, str, str] = ("this", "none", "this")) -> str:
         """Create or replace a verb from source lines; raise on compile errors."""
-        exists = self.eval(f"{moolit.escape(name)} in verbs({obj})")
+        exists = self.eval(f"{self.escape(name)} in verbs({obj})")
         if not exists:
-            self.eval(f"add_verb({obj}, {{player, {moolit.escape(perms)}, {moolit.escape(name)}}}, "
-                      f"{moolit.serialize(list(args))})")
+            self.eval(f"add_verb({obj}, {{player, {self.escape(perms)}, {self.escape(name)}}}, "
+                      f"{self.serialize(list(args))})")
         else:
-            self.eval(f"set_verb_info({obj}, {moolit.escape(name)}, {{player, {moolit.escape(perms)}, {moolit.escape(name)}}})")
-            self.eval(f"set_verb_args({obj}, {moolit.escape(name)}, {moolit.serialize(list(args))})")
-        errors = self.eval(f"set_verb_code({obj}, {moolit.escape(name)}, {moolit.serialize(lines)})")
+            self.eval(f"set_verb_info({obj}, {self.escape(name)}, {{player, {self.escape(perms)}, {self.escape(name)}}})")
+            self.eval(f"set_verb_args({obj}, {self.escape(name)}, {self.serialize(list(args))})")
+        errors = self.eval(f"set_verb_code({obj}, {self.escape(name)}, {self.serialize(lines)})")
         if errors:
             raise MooError(f"{obj}:{name} did not compile: " + " / ".join(map(str, errors)))
         return "updated" if exists else "installed"

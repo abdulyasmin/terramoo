@@ -157,7 +157,7 @@ def cmd_adopt(args):
         print("nothing to adopt")
         return
     ops = [["register", k, o] for k, o in new]
-    results = w.eval(w.helper("tmoo_apply", moolit.serialize(ops)))
+    results = w.eval(w.helper("tmoo_apply", w.transport.serialize(ops)))
     for (k, o), res in zip(new, results):
         print(f"  {k} = {o}" if res[0] == 1 else f"  {k}: {res[1]} {res[2]}")
     refs.registry = w.read_registry()

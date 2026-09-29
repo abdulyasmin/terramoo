@@ -40,6 +40,21 @@ def test_float_serialization_keeps_a_point():
     assert moolit.parse(moolit.serialize(1e20)) == 1e20
 
 
+def test_moor_string_escapes_round_trip_through_nested_literals():
+    value = ["é", Map({"arabic": "م", "control": "\n\t\x01"})]
+    literal = r'{"\u00E9", ["arabic" -> "\u0645", "control" -> "\n\t\x01"]}'
+
+    assert moolit.parse(literal, dialect="moor") == value
+    assert moolit.serialize(value, dialect="moor") == literal
+    assert moolit.parse(r'"\n\u00E9"') == "nu00E9"
+
+
+@pytest.mark.parametrize("text", ["9" * 5_000, "[{{1}} -> 2]"])
+def test_literal_conversion_failures_are_literal_errors(text):
+    with pytest.raises(moolit.LiteralError):
+        moolit.parse(text)
+
+
 SAMPLE = '''object grand_courtyard
   name: "Grand Courtyard"
   parent: $room
@@ -86,6 +101,20 @@ def test_objdef_round_trip():
     assert look.names == "look_self look*ing"
     assert look.owner == Obj(2)
     assert objdef.render(obj) == SAMPLE
+
+
+def test_objdef_keeps_unicode_raw_and_escapes_only_controls():
+    obj = ObjectDef(
+        key="cafe",
+        name="Café مقهى",
+        parent=Ref("$", "thing"),
+        props=[PropDef(name="description", value=["Café", "مقهى\nsecond line"], perms="rc")],
+    )
+    text = objdef.render(obj)
+    assert 'name: "Café مقهى"' in text
+    assert '"مقهى\\nsecond line"' in text
+    assert "\\u" not in text
+    assert objdef.parse(text) == obj
 
 
 def test_objdef_minimal():
