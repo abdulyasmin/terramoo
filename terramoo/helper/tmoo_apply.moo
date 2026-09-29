@@ -102,6 +102,25 @@ for op in (ops)
         reg = {{@reg[1], key}, {@reg[2], r}, {@reg[3], nonce}};
       endif
       this.registry = reg;
+    elseif (kind == "rename")
+      old_key = op[2];
+      o = op[3];
+      nonce = op[4];
+      new_key = op[5];
+      i = old_key in reg[1];
+      if (!i || reg[2][i] != o || reg[3][i] != nonce)
+        raise(E_INVARG, tostr("key ", old_key, " changed before rename"));
+      endif
+      if (nonce && valid(o) && (!("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce))
+        raise(E_INVARG, tostr("key ", old_key, " names a different object generation"));
+      endif
+      j = new_key in reg[1];
+      if (j && j != i)
+        raise(E_INVARG, tostr("key ", reg[1][j], " is already registered as ", reg[2][j]));
+      endif
+      reg[1][i] = new_key;
+      this.registry = reg;
+      r = o;
     elseif (kind == "destroy")
       key = op[2];
       o = op[3];
@@ -212,6 +231,40 @@ for op in (ops)
         set_property_info(o, op[5], op[6]);
       elseif (kind == "setprop")
         o.(op[5]) = op[6];
+      elseif (kind == "endpoint")
+        prop = op[5];
+        expected = op[6];
+        new = op[7];
+        if ((prop != "source" && prop != "dest") || typeof(expected) != typeof(#0) || typeof(new) != typeof(#0))
+          raise(E_INVARG, "endpoint needs source or dest and two object values");
+        endif
+        current = o.(prop);
+        if (current != expected)
+          raise(E_INVARG, tostr(prop, " changed before endpoint update; replan"));
+        endif
+        if (valid(expected) && prop == "source" && o in `expected.exits ! ANY => {}')
+          expected:remove_exit(o);
+          if (o in `expected.exits ! ANY => {}')
+            raise(E_INVARG, tostr("exit ", o, " remains in ", expected, ".exits"));
+          endif
+        elseif (valid(expected) && prop == "dest" && o in `expected.entrances ! ANY => {}')
+          expected:remove_entrance(o);
+          if (o in `expected.entrances ! ANY => {}')
+            raise(E_INVARG, tostr("exit ", o, " remains in ", expected, ".entrances"));
+          endif
+        endif
+        o.(prop) = new;
+        if (valid(new) && prop == "source" && !(o in `new.exits ! ANY => {}'))
+          new:add_exit(o);
+          if (!(o in `new.exits ! ANY => {}'))
+            raise(E_INVARG, tostr("exit ", o, " was not added to ", new, ".exits"));
+          endif
+        elseif (valid(new) && prop == "dest" && !(o in `new.entrances ! ANY => {}'))
+          new:add_entrance(o);
+          if (!(o in `new.entrances ! ANY => {}'))
+            raise(E_INVARG, tostr("exit ", o, " was not added to ", new, ".entrances"));
+          endif
+        endif
       elseif (kind == "clearprop")
         clear_property(o, op[5]);
       elseif (kind == "unlink")

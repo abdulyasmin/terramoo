@@ -172,10 +172,13 @@ def test_registry_value_accepts_parallel_key_and_object_lists():
     assert partially_migrated.generations == {"hall": "generation-hall", "door": None}
 
 
-@pytest.mark.parametrize("key", ["../outside", "/absolute", "café", "bad-key"])
-def test_registry_value_rejects_keys_that_are_not_ascii_identifiers(key):
-    with pytest.raises(MooError, match="malformed registry"):
-        registry_value([[key], [Obj(10)]])
+def test_registry_value_accepts_and_marks_legacy_non_identifier_keys():
+    registry = registry_value(
+        [["hall", "bad-key", "مرحبا"], [Obj(10), Obj(11), Obj(12)]]
+    )
+
+    assert registry == {"hall": Obj(10), "bad-key": Obj(11), "مرحبا": Obj(12)}
+    assert registry.legacy_keys == {"bad-key", "مرحبا"}
 
 
 def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):

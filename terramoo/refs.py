@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import objdef
 from .moolit import Obj, Ref, walk
 
 
@@ -25,6 +26,11 @@ class Registry(dict[str, Obj]):
     def __init__(self, values=(), generations: dict[str, str | None] | None = None):
         super().__init__(values)
         self.generations = dict(generations or {})
+
+    @property
+    def legacy_keys(self) -> set[str]:
+        """Keys readable from old registries but unsafe as object-file names."""
+        return {key for key in self if not objdef.is_identifier(key)}
 
 
 @dataclass
@@ -92,6 +98,10 @@ class Refs:
     def generation_for(self, name: str) -> str | None:
         key = self.registry_key(name)
         return self.generations.get(key) if key is not None else None
+
+    @property
+    def legacy_keys(self) -> set[str]:
+        return {key for key in self.registry if not objdef.is_identifier(key)}
 
     def _pending_folded(self) -> set[str]:
         return {name.lower() for name in self.pending}

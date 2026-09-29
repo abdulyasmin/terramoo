@@ -28,7 +28,7 @@ SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 3
+HELPER_VERSION = 4
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 
 # Properties that are the MOO's runtime state rather than the object's
@@ -97,7 +97,7 @@ def registry_value(raw) -> Registry:
     if isinstance(raw, list) and len(raw) in (2, 3) and all(isinstance(x, list) for x in raw):
         keys, objects = raw[:2]
         nonces = raw[2] if len(raw) == 3 else [None] * len(keys)
-        valid_keys = all(objdef.is_identifier(k) for k in keys)
+        valid_keys = all(isinstance(k, str) for k in keys)
         valid_objects = all(isinstance(o, Obj) for o in objects)
         valid_nonces = all(n is None or isinstance(n, str) for n in nonces)
         unique_keys = valid_keys and len({k.lower() for k in keys}) == len(keys)

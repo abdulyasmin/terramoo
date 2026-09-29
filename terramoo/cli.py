@@ -95,6 +95,8 @@ def cmd_status(args):
             notes.append("no file")
         if not refs.generations.get(key):
             notes.append("unverified; use adopt --verify")
+        if key in refs.legacy_keys:
+            notes.append(f"legacy key; use tmoo rename-key {key!r} NEW")
         mark = f"  ({'; '.join(notes)})" if notes else ""
         print(f"  {key:32} {o}{mark}")
     for key in sorted(files):
@@ -117,6 +119,17 @@ def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
 
 def _write_exports(w: World, refs, keys) -> int:
     """Write the files for `keys` from the live objects; how many were written."""
+    safe_keys = []
+    for key in keys:
+        actual_key = _registry_key(refs, key) or key
+        if not objdef.is_identifier(actual_key):
+            print(
+                f"  {actual_key}: legacy registry key; use `tmoo rename-key {actual_key!r} NEW`",
+                file=sys.stderr,
+            )
+            continue
+        safe_keys.append(key)
+    keys = safe_keys
     live = export_mod.export(w, refs, keys)
     existing = {path.stem.lower(): path.stem for path in w.objects_dir.glob("*.moo")}
     written = 0
@@ -252,6 +265,91 @@ def cmd_adopt(args):
         raise MooError(f"adoption failed: {'; '.join(problems)}")
 
 
+def cmd_rename_key(args):
+    """Atomically rename one registry binding, then its local file if any."""
+    w = _world(args)
+    refs = w.refs()
+    old = refs.registry_key(args.old)
+    if old is None:
+        raise MooError(f"{args.old!r} is not in the registry")
+    new = validate_key(args.new)
+    occupied = refs.registry_key(new)
+    if occupied is not None and occupied != old:
+        raise MooError(f"{new} is already {refs.registry[occupied]}")
+
+    source = next(
+        (path for path in w.objects_dir.glob("*.moo") if path.stem.lower() == old.lower()),
+        None,
+    )
+    destination = w.file_for(new) if source is not None else None
+    rendered = None
+    same_path = False
+    if source is not None:
+        if destination.exists():
+            try:
+                same_path = source.samefile(destination)
+            except OSError:
+                same_path = False
+            if not same_path:
+                raise MooError(f"cannot rename {source.name}: {destination.name} already exists")
+        try:
+            local = objdef.parse(source.read_text())
+        except ValueError as e:
+            raise MooError(f"cannot rename {source.name}: {e}") from None
+        local.key = new
+        rendered = objdef.render(local)
+
+    w.require_helper_version()
+    obj = refs.registry[old]
+    nonce = refs.generation_for(old) or ""
+    op = ["rename", old, obj, nonce, new]
+    results = w.eval(w.helper("tmoo_apply", w.transport.serialize([op])))
+    if not (
+        isinstance(results, list)
+        and len(results) == 1
+        and isinstance(results[0], list)
+        and len(results[0]) == 2
+        and results[0][0] == 1
+        and results[0][1] == obj
+    ):
+        if (
+            isinstance(results, list)
+            and len(results) == 1
+            and isinstance(results[0], list)
+            and len(results[0]) >= 3
+            and results[0][0] == 0
+        ):
+            raise MooError(f"rename failed: {results[0][1]}: {results[0][2]}")
+        raise MooError(f"rename failed: malformed helper result: {results!r}")
+
+    updated = w.read_registry()
+    actual = next(
+        (
+            key for key, value in updated.items()
+            if key.lower() == new.lower()
+            and value == obj
+            and updated.generations.get(key) == (nonce or None)
+        ),
+        None,
+    )
+    if actual is None:
+        raise MooError(f"rename returned success, but {new!r} is absent from the registry")
+    refs.replace_registry(updated)
+    w.save_state(refs.snapshot())
+
+    if source is not None and rendered is not None:
+        temp = w.objects_dir / f".{new}.{uuid4().hex}.tmp"
+        try:
+            temp.write_text(rendered)
+            temp.replace(destination)
+            if not same_path and source.exists():
+                source.unlink()
+        finally:
+            if temp.exists():
+                temp.unlink()
+    print(f"renamed {old} to {actual} ({obj})")
+
+
 def parse_object_arg(text: str) -> Obj:
     """`#123`, `123` or a mooR UUID object (`#048D05-1234567890`)."""
     text = text.strip()
@@ -283,6 +381,8 @@ def _print_plan(p: plan_mod.Plan, destroy: bool):
         print(f"  ~ {plan_mod.describe(op)}")
     for key in p.destroys:
         print(f"  - {'recycle' if destroy else 'orphan (no file; --destroy recycles)'} {key}")
+    for warning in p.warnings:
+        print(f"  ? {warning}")
     for prob in p.problems:
         print(f"  ! {prob}")
     if p.unchanged:
@@ -292,7 +392,7 @@ def _print_plan(p: plan_mod.Plan, destroy: bool):
 def cmd_plan(args):
     w = _world(args)
     _, _, p = _plan(w)
-    if p.empty and not p.problems:
+    if p.empty and not p.problems and not p.warnings:
         print("no changes")
         return
     _print_plan(p, args.destroy)
@@ -390,6 +490,11 @@ def main(argv=None):
     a.add_argument("--owned", action="store_true", help="adopt every owned object not yet managed")
     a.add_argument("--verify", action="store_true", help="stamp an existing key/object binding after confirming its identity")
     a.set_defaults(fn=cmd_adopt)
+
+    rk = sub.add_parser("rename-key", help="rename a registry key and its local object file")
+    rk.add_argument("old", help="existing registry key, including a legacy key")
+    rk.add_argument("new", help="new ASCII identifier")
+    rk.set_defaults(fn=cmd_rename_key)
 
     pl = sub.add_parser("plan", help="show what apply would do")
     pl.add_argument("--destroy", action="store_true", help="include recycling objects with no file")

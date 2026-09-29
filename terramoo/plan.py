@@ -22,6 +22,7 @@ class Plan:
     gone: dict[str, Obj] = field(default_factory=dict)  # registry entries the MOO no longer has
     ops: list[tuple] = field(default_factory=list)
     destroys: dict[str, Obj] = field(default_factory=dict)  # orphan bindings at planning time
+    warnings: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
 
@@ -51,6 +52,10 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     broken: set[str] = set()
     file_keys = _folded_names(files, "file keys")
     live_keys = _folded_names(live, "live keys")
+    for key in sorted(refs.legacy_keys):
+        plan.warnings.append(
+            f"registry key {key!r} is legacy; rename it with `tmoo rename-key {key!r} NEW`"
+        )
 
     def live_for(key: str):
         live_key = live_keys.get(key.lower())
@@ -215,6 +220,14 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
         if isinstance(old, (Obj, Ref)):
             ops.append(("unlink", target, relation, old))
 
+    def reconcile_endpoint(prop: PropDef, prop_name: str, value) -> bool:
+        relation = prop.name.lower() in ("source", "dest")
+        old = refs.resolve(prop.value, live=True) if relation else None
+        if isinstance(old, (Obj, Ref)) and isinstance(value, (Obj, Ref)):
+            ops.append(("endpoint", target, prop_name, old, value))
+            return True
+        return False
+
     for p in want.props:
         cur = have_props.pop(p.name.lower(), None)
         value = refs.resolve(p.value)
@@ -237,15 +250,14 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
                     ops.append(("propinfo", target, cur.name, [owner, perms, p.name]))
                     prop_name = p.name
                 if value != refs.resolve(cur.value, live=True):
-                    unlink_old(cur)
-                    ops.append(("setprop", target, prop_name, value))
+                    if not reconcile_endpoint(cur, prop_name, value):
+                        ops.append(("setprop", target, prop_name, value))
         else:
             if cur is not None and cur.defined:
                 raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
             if cur is None or value != refs.resolve(cur.value, live=True):
-                if cur is not None:
-                    unlink_old(cur)
-                ops.append(("setprop", target, p.name, value))
+                if cur is None or not reconcile_endpoint(cur, p.name, value):
+                    ops.append(("setprop", target, p.name, value))
     for cur in have_props.values():
         unlink_old(cur)
         ops.append(("rmprop", target, cur.name) if cur.defined else ("clearprop", target, cur.name))
@@ -265,10 +277,10 @@ def diff_object(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -
         verb_targets[position] = VerbTarget(verb.live_index or position, label)
     verb_groups: dict[str, list[tuple[int, VerbDef]]] = {}
     for position, verb in enumerate(have_verbs, 1):
-        verb_groups.setdefault(verb.names.lower(), []).append((position, verb))
+        verb_groups.setdefault(verb.key.lower(), []).append((position, verb))
     matched: set[int] = set()
     for v in want.verbs:
-        group = verb_groups.get(v.names.lower(), [])
+        group = verb_groups.get(v.key.lower(), [])
         current = next(((position, verb) for position, verb in group if position not in matched), None)
         owner = _owner(refs, v.owner)
         perms = normalize(v.perms, "rwxd")
@@ -305,4 +317,6 @@ def describe(op: tuple) -> str:
         return f"{kind} {target}.{name}"
     if kind in ("rmprop", "clearprop", "rmverb", "propinfo", "verbinfo", "verbargs"):
         return f"{kind} {target}.{rest[0]}"
+    if kind == "endpoint":
+        return f"endpoint {target}.{rest[0]} {rest[1]} -> {rest[2]}"
     return f"{kind} {target} {' '.join(str(x) for x in rest)}"

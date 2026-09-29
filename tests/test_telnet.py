@@ -328,18 +328,20 @@ def test_moor_escaped_nested_export_record_uses_moor_dialect(monkeypatch):
     assert obj.props[0].value == "م\n"
 
 
-@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after"])
+@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after", "before😀after"])
 def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, value):
     literal = moolit.serialize(value, dialect=moolit.MOOR)
+    assert literal.isascii()
+    answer_literal = moolit.escape(value, dialect=moolit.MOOR, raw_unicode=True)
 
     def reply(tag, line):
         if tag is None:
             return ["*** Connected ***"]
         if is_sentinel(tag, line):
             return [tag + "Z"]
-        answer_literal = "1" if "_r = (player)" in line or "_r = (1)" in line else literal
-        return [tag + "S", tag + "B" + str(len(answer_literal)), tag + "C1",
-                tag + "D" + answer_literal, tag + "E"]
+        result = "1" if "_r = (player)" in line or "_r = (1)" in line else answer_literal
+        return [tag + "S", tag + "B" + str(len(result)), tag + "C1",
+                tag + "D" + result, tag + "E"]
 
     fake = FakeMoo(reply)
     t = client(monkeypatch, fake)
@@ -350,7 +352,7 @@ def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, 
     assert all(line.isascii() and all(0x20 <= ord(char) <= 0x7E for char in line) for line in fake.received)
 
 
-@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after"])
+@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after", "before😀after"])
 def test_lambdamoo_telnet_rejects_string_bytes_the_server_would_drop(monkeypatch, value):
     def reply(tag, line):
         if tag is None:

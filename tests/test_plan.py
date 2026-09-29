@@ -124,6 +124,30 @@ def test_duplicate_verbs_are_matched_in_order_and_mutated_by_live_index():
     assert plan.describe(ops[0]) == "verbcode @hall.do#2"
 
 
+def test_alias_change_updates_the_first_duplicate_primary_without_reordering():
+    r = refs(hall=200)
+    want = room(verbs=[
+        VerbDef("do first", ["return 1;"]),
+        VerbDef("do", ["return 2;"]),
+    ])
+    have = room(verbs=[
+        VerbDef("do", ["return 1;"], live_index=1),
+        VerbDef("do", ["return 2;"], live_index=2),
+    ])
+
+    ops = plan.diff_object("hall", want, have, r)
+
+    assert ops == [
+        ("verbinfo", Ref("@", "hall"), plan.VerbTarget(1, "do#1"), [ME, "rxd", "do first"]),
+    ]
+    have.verbs[0].names = "do first"
+    assert [(verb.names, verb.code[0]) for verb in have.verbs] == [
+        ("do first", "return 1;"),
+        ("do", "return 2;"),
+    ]
+    assert plan.diff_object("hall", want, have, r) == []
+
+
 def test_unchanged_duplicate_and_overlapping_alias_verbs_need_nothing():
     r = refs(hall=200)
     want = room(verbs=[
@@ -223,7 +247,7 @@ def test_map_values_compare_after_resolution():
     assert plan.diff_object("hall", want, have, r) == []
 
 
-def test_exit_endpoint_changes_unlink_old_rooms_before_setting_properties():
+def test_exit_endpoint_changes_are_one_atomic_reconciliation_op():
     r = refs(hall=200, old_source=201, new_source=202, old_dest=203, new_dest=204)
     want = room(props=[
         PropDef("source", Ref("@", "new_source"), defined=False),
@@ -235,11 +259,23 @@ def test_exit_endpoint_changes_unlink_old_rooms_before_setting_properties():
     ])
 
     assert plan.diff_object("hall", want, have, r) == [
-        ("unlink", Ref("@", "hall"), "exit", Obj(201)),
-        ("setprop", Ref("@", "hall"), "source", Obj(202)),
-        ("unlink", Ref("@", "hall"), "entrance", Obj(203)),
-        ("setprop", Ref("@", "hall"), "dest", Obj(204)),
+        ("endpoint", Ref("@", "hall"), "source", Obj(201), Obj(202)),
+        ("endpoint", Ref("@", "hall"), "dest", Obj(203), Obj(204)),
     ]
+
+
+def test_plan_reports_legacy_registry_keys_without_blocking_other_changes():
+    registry = {"hall": Obj(200), "bad-key": Obj(201), "مرحبا": Obj(202)}
+    r = Refs(player=ME, registry=registry, sysrefs={"room": Obj(3)})
+
+    pending = plan.build({"hall": room(name="Great Hall")}, {"hall": room()}, r)
+
+    assert pending.problems == []
+    assert pending.warnings == [
+        "registry key 'bad-key' is legacy; rename it with `tmoo rename-key 'bad-key' NEW`",
+        "registry key 'مرحبا' is legacy; rename it with `tmoo rename-key 'مرحبا' NEW`",
+    ]
+    assert ("name", Ref("@", "hall"), "Great Hall") in pending.ops
 
 
 def test_non_object_source_and_dest_values_are_plain_properties():
@@ -256,6 +292,23 @@ def test_non_object_source_and_dest_values_are_plain_properties():
     assert plan.diff_object("hall", want, have, r) == [
         ("setprop", Ref("@", "hall"), "source", "a new book"),
         ("setprop", Ref("@", "hall"), "dest", ["b"]),
+    ]
+
+
+def test_endpoint_change_with_a_non_object_on_either_side_is_a_plain_setprop():
+    r = refs(hall=200, old_source=201, new_dest=202)
+    want = room(props=[
+        PropDef("source", "not a room", defined=False),
+        PropDef("dest", Ref("@", "new_dest"), defined=False),
+    ])
+    have = room(props=[
+        PropDef("source", Ref("@", "old_source"), defined=False),
+        PropDef("dest", "not a room", defined=False),
+    ])
+
+    assert plan.diff_object("hall", want, have, r) == [
+        ("setprop", Ref("@", "hall"), "source", "not a room"),
+        ("setprop", Ref("@", "hall"), "dest", Obj(202)),
     ]
 
 

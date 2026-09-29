@@ -140,6 +140,122 @@ def test_plan_exports_the_case_matching_registry_binding(monkeypatch):
     assert pending.unchanged == ["hall"]
 
 
+def test_status_reports_each_legacy_registry_key_with_rename_command(monkeypatch, capsys):
+    refs = Refs(
+        player=Obj(1),
+        registry=registry_value([["bad-key", "مرحبا"], [Obj(10), Obj(11)]])
+    )
+    world = SimpleNamespace(
+        name="test",
+        describe=lambda: "fake://test",
+        player_name="alice",
+        toolbox=Obj(99),
+        refs=lambda: refs,
+        load_files=lambda: {},
+        server_info=lambda: ([], "FakeMOO"),
+    )
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_status(SimpleNamespace())
+
+    output = capsys.readouterr().out
+    assert "bad-key" in output and "tmoo rename-key 'bad-key' NEW" in output
+    assert "مرحبا" in output and "tmoo rename-key 'مرحبا' NEW" in output
+
+
+def test_rename_key_atomically_moves_a_legacy_binding(tmp_path, monkeypatch):
+    class RenameWorld:
+        def __init__(self):
+            self.raw_registry = [["bad-key"], [Obj(10)], ["generation-10"]]
+            self.objects_dir = tmp_path
+            self.transport = SimpleNamespace(serialize=moolit.serialize)
+            self.sent = []
+            self.saved = []
+
+        def refs(self):
+            return Refs(player=Obj(1), registry=registry_value(self.raw_registry))
+
+        def require_helper_version(self):
+            pass
+
+        def helper(self, verb, arg):
+            return verb, arg
+
+        def eval(self, call):
+            self.sent.append(call)
+            op = moolit.parse(call[1])[0]
+            _, old, expected, nonce, new = op
+            assert [old, expected, nonce] == ["bad-key", Obj(10), "generation-10"]
+            self.raw_registry[0][0] = new
+            return [[1, Obj(10)]]
+
+        def read_registry(self):
+            return registry_value(self.raw_registry)
+
+        def save_state(self, registry):
+            self.saved.append(dict(registry))
+
+        def file_for(self, key):
+            assert key == "good_key"
+            return self.objects_dir / f"{key}.moo"
+
+    world = RenameWorld()
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="bad-key", new="good_key"))
+
+    assert moolit.parse(world.sent[0][1]) == [
+        ["rename", "bad-key", Obj(10), "generation-10", "good_key"]
+    ]
+    assert world.raw_registry[0] == ["good_key"]
+    assert world.saved == [{"good_key": Obj(10)}]
+
+
+def test_rename_key_renames_an_existing_local_object_file(tmp_path, monkeypatch):
+    world = World("test", tmp_path, "alice", {})
+    world.objects_dir.mkdir(parents=True)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    raw_registry = [["old_key"], [Obj(10)], ["generation-10"]]
+    saved = []
+    world._transport = SimpleNamespace(serialize=moolit.serialize)
+    monkeypatch.setattr(world, "refs", lambda: Refs(player=Obj(1), registry=registry_value(raw_registry)))
+    monkeypatch.setattr(world, "require_helper_version", lambda: None)
+    monkeypatch.setattr(world, "helper", lambda verb, arg: (verb, arg))
+
+    def rename(call):
+        assert moolit.parse(call[1]) == [
+            ["rename", "old_key", Obj(10), "generation-10", "new_key"]
+        ]
+        raw_registry[0][0] = "new_key"
+        return [[1, Obj(10)]]
+
+    monkeypatch.setattr(world, "eval", rename)
+    monkeypatch.setattr(world, "read_registry", lambda: registry_value(raw_registry))
+    monkeypatch.setattr(world, "save_state", lambda registry: saved.append(dict(registry)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
+
+    assert not world.file_for("old_key").exists()
+    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
+    assert saved == [{"new_key": Obj(10)}]
+
+
+def test_pull_skips_legacy_keys_without_building_a_file_path(monkeypatch, capsys):
+    refs = Refs(
+        player=Obj(1),
+        registry=registry_value([["hall", "../outside"], [Obj(10), Obj(11)]])
+    )
+    world = SimpleNamespace(
+        objects_dir=SimpleNamespace(glob=lambda pattern: []),
+        file_for=lambda key: pytest.fail(f"built a path for {key}"),
+    )
+    monkeypatch.setattr(cli.export_mod, "export", lambda w, r, keys: {})
+
+    assert cli._write_exports(world, refs, ["../outside"]) == 0
+    assert "tmoo rename-key '../outside' NEW" in capsys.readouterr().err
+
+
 def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch):
     world = SimpleNamespace(
         refs=lambda: registry_value([["hall", "Hall"], [Obj(10), Obj(11)]]),

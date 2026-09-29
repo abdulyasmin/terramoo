@@ -174,7 +174,7 @@ def test_exit_reconciliation_failures_from_the_fake_helper_are_reported():
     class FailingExitWorld(FakeWorld):
         def _op(self, op):
             self.sent.append(op)
-            if op[0] == "unlink":
+            if op[0] == "endpoint":
                 return [0, "E_PERM", "remove_exit refused"]
             if op[0] == "link":
                 return [0, "E_INVARG", "exit absent after add_exit"]
@@ -195,10 +195,9 @@ def test_exit_reconciliation_failures_from_the_fake_helper_are_reported():
 
     outcome = apply.run(w, plan.Plan(ops=ops), refs, files={"hall": want}, log=lambda _: None)
 
-    assert [op[0] for op in w.sent] == ["unlink", "link"]
+    assert [op[0] for op in w.sent] == ["endpoint", "link"]
     assert outcome.failed == [
-        ("unlink @hall exit #11", "E_PERM: remove_exit refused"),
-        ("setprop @hall.source", "prerequisite unlink @hall exit #11 failed"),
+        ("endpoint @hall.source #11 -> #12", "E_PERM: remove_exit refused"),
         ("link exits among 1 objects", "E_INVARG: exit absent after add_exit"),
     ]
 
@@ -225,7 +224,59 @@ def test_successful_exit_unlink_allows_the_endpoint_mutation():
     )
 
     assert outcome.failed == []
-    assert [op[0] for op in w.sent] == ["unlink", "setprop"]
+    assert [op[0] for op in w.sent] == ["endpoint"]
+
+
+def test_endpoint_race_fails_without_changing_or_relinking_the_newer_room():
+    exit_obj, planned_old, raced_old, desired = Obj(10), Obj(11), Obj(12), Obj(13)
+
+    class RacingEndpointWorld(FakeWorld):
+        def __init__(self):
+            super().__init__()
+            self.endpoints = {exit_obj: raced_old}
+            self.members = {planned_old: set(), raced_old: {exit_obj}, desired: set()}
+
+        def _op(self, op):
+            self.sent.append(op)
+            if op[0] != "endpoint":
+                return [1, 1]
+            _, _, target, _, prop, expected, new = op
+            assert prop == "source"
+            if self.endpoints[target] != expected:
+                return [0, "E_INVARG", "source changed before endpoint update; replan"]
+            self.members[expected].discard(target)
+            self.endpoints[target] = new
+            self.members[new].add(target)
+            return [1, 1]
+
+    w = RacingEndpointWorld()
+    refs = verify_bindings(
+        w,
+        {"door": exit_obj, "planned_old": planned_old, "raced_old": raced_old, "desired": desired},
+    )
+    want = ObjectDef(
+        key="door", name="Door", parent=Obj(3),
+        props=[PropDef("source", Ref("@", "desired"), defined=False)],
+    )
+    have = ObjectDef(
+        key="door", name="Door", parent=Obj(3),
+        props=[PropDef("source", Ref("@", "planned_old"), defined=False)],
+    )
+
+    outcome = apply.run(
+        w,
+        plan.Plan(ops=plan.diff_object("door", want, have, refs)),
+        refs,
+        files={"door": want},
+        log=lambda _: None,
+    )
+
+    assert [op[0] for op in w.sent] == ["endpoint"]
+    assert outcome.failed == [
+        ("endpoint @door.source #11 -> #13", "E_INVARG: source changed before endpoint update; replan"),
+    ]
+    assert w.endpoints[exit_obj] == raced_old
+    assert w.members == {planned_old: set(), raced_old: {exit_obj}, desired: set()}
 
 
 def test_orphans_are_only_recycled_when_destroy_is_explicit():

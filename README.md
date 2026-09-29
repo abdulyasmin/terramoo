@@ -17,6 +17,7 @@ tmoo status              # registry vs files vs objects owned but unmanaged
 tmoo adopt --owned       # put every owned object under management, writing files
 tmoo adopt '#123' key    # or one at a time
 tmoo adopt '#123' key --verify  # confirm/stamp a legacy binding after inspecting it
+tmoo rename-key OLD NEW  # migrate a legacy registry key to an ASCII identifier
 tmoo pull [key...]       # files <- MOO
 tmoo plan                # what apply would do
 tmoo apply [--destroy]   # MOO <- files (asks first; -y skips; --destroy recycles orphans)

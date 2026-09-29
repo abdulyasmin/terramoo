@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import quote
 
 
 class Map(dict):
@@ -249,6 +250,11 @@ def serialize(value, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str
     if isinstance(value, float):
         return repr(value)  # always has a point or an exponent, as MOO needs
     if isinstance(value, str):
+        if dialect == MOOR and not raw_unicode and any(ord(c) > 0xFFFF for c in value):
+            # mooR accepts only four hex digits in a \u escape.  Build strings
+            # containing larger code points from an ASCII-only UTF-8 percent
+            # encoding instead, so telnet never has to send the raw character.
+            return f"urldecode({escape(quote(value, safe=''), dialect=MOOR)})"
         return escape(value, dialect=dialect, raw_unicode=raw_unicode)
     if isinstance(value, (Obj, Err, Ref, Sym)):
         return str(value)
