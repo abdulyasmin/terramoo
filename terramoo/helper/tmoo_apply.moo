@@ -29,6 +29,10 @@ for op in (ops)
         r.name = op[4];
         "create() may run an :initialize verb that changes the registry.";
         reg = this.registry;
+        j = r in reg[2];
+        if (j && reg[1][j] != op[2])
+          raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j], "; cannot bind key ", op[2]));
+        endif
       else
         r = op[3];
       endif

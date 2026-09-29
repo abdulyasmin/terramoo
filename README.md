@@ -123,6 +123,8 @@ world; `override` is the one keyword of ours.
 - `apply` creates new objects parents first (recreating any the MOO has
   lost), re-reads them to correct what the core's `initialize` set, then
   sends the rest in batches. A failed op is reported and the rest carry on.
+  If `initialize` registers a new object under another key, create reports
+  a conflict and preserves that registration and object.
   Nothing is recycled without `--destroy`.
   Destroy checks that the key still names the expected object, recycles it
   if it exists, and unregisters it in one helper call. Retrying also removes
