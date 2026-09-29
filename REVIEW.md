@@ -68,7 +68,7 @@ graph TD
 | Diff | [plan.py](terramoo/plan.py) | `build()` / `diff_object()`: takes two dicts of `ObjectDef` and returns a `Plan` (creates, ops, destroys, problems). Pure. |
 | MOO I/O | [export.py](terramoo/export.py), [apply.py](terramoo/apply.py), [world.py](terramoo/world.py) | Read live objects, run a plan, bootstrap the toolbox and keep `state.json` up to date. |
 | Wire | [transport/](terramoo/transport/__init__.py) | `eval(expression) → value` over telnet (any MOO) or MCP (hosted gates). |
-| In-MOO | [helper/*.moo](terramoo/helper/) | Four verbs installed on the toolbox. They do every loop and every side effect. |
+| In-MOO | [helper/*.moo](terramoo/helper/) | Six verbs installed on the toolbox: `tmoo_registry`, `tmoo_callback`, `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They do every loop and every side effect. |
 | Entry | [cli.py](terramoo/cli.py) | argparse, printing and exit codes. The `tmoo` script is `terramoo.cli:main` ([pyproject.toml](pyproject.toml)). |
 
 Dependencies point downward only. `plan.py` imports only `model`, `moolit`
@@ -147,9 +147,11 @@ registry back with it. The next plan then sees the missing objects as
 - **Network, tested against fakes:** `transport/telnet.py` (a scripted
   socket in [tests/test_telnet.py](tests/test_telnet.py)) and
   `transport/mcp.py` (stubbed tool calls in [tests/test_mcp.py](tests/test_mcp.py)).
-- **Only covered by the live round trip:** `World.bootstrap`, the four
-  helpers, `export._to_def` against real servers, and `cli` end to end
+- **Only covered by the live round trip:** `World.bootstrap`,
+  `export._to_def` against real servers, and `cli` end to end
   ([tests/test_live.py](tests/test_live.py), skipped unless `TMOO_LIVE` is set).
+  The six helpers also run against the stdin/stdout LambdaMOO fake in
+  [tests/test_helper.py](tests/test_helper.py).
 - **Platform:** `secrets.py` runs the macOS `security` CLI through
   `subprocess`. On any other OS it uses the config file.
 
@@ -200,7 +202,7 @@ and `tokei terramoo tests testbeds`):
 | Area | Files | Lines | Notes |
 |---|---:|---:|---|
 | `terramoo/` Python | 15 | 2,159 | The package |
-| `terramoo/helper/*.moo` | 4 | 198 | MOO code installed on the toolbox |
+| `terramoo/helper/*.moo` | 6 | 740 | MOO code installed on the toolbox |
 | `tests/` | 8 | 690 | Test-to-source ratio ≈ 0.32 |
 | `testbeds/` | 17 | 716 | Shell and Python build/provision scripts. Not shipped. |
 
@@ -217,7 +219,7 @@ tokei over those three trees: Python 2,571 code lines in 26 files, Shell
 | [terramoo/objdef.py](terramoo/objdef.py) | 237 |
 | [terramoo/plan.py](terramoo/plan.py) | 213 |
 | [terramoo/moolit.py](terramoo/moolit.py) | 199 |
-| [terramoo/helper/tmoo_apply.moo](terramoo/helper/tmoo_apply.moo) | 126 |
+| [terramoo/helper/tmoo_apply.moo](terramoo/helper/tmoo_apply.moo) | 514 |
 | [terramoo/apply.py](terramoo/apply.py) | 124 |
 
 **Dependencies** (`uv tree`, [pyproject.toml](pyproject.toml)): **0 runtime
@@ -276,11 +278,12 @@ properties in `DEFAULT_IGNORE_PROPS`.
 | 2 | [model.py](terramoo/model.py) | 69 | `ObjectDef`, `PropDef.defined`, `VerbDef.key`, `normalize` | The shared shape of files and live objects. `owner=None` means "the player". |
 | 3 | [refs.py](terramoo/refs.py) | 92 | `Refs.resolve_ref`, `symbolize_obj`, `reindex`, `pending` | Invariant 5 lives here. `UnresolvedRef` is a `KeyError`, and `apply` relies on that. |
 | 4 | [plan.py](terramoo/plan.py) | 213 | `build`, `diff_object`, `_topo`, `describe` | The core logic. Every op tuple is born in `diff_object`. Note that `build` **sets `refs.pending`**. |
-| 5 | [helper/tmoo_apply.moo](terramoo/helper/tmoo_apply.moo) | 126 | The branch per op kind, the registry update, `link` | The other half of every op tuple. Read it next to `diff_object`. |
-| 6 | [apply.py](terramoo/apply.py) | 124 | `run`, `_replan_created`, `_resolve_op`, `_send` | The three phases, and why `pending` is cleared between them. |
-| 7 | [export.py](terramoo/export.py) + [helper/tmoo_export.moo](terramoo/helper/tmoo_export.moo) | 70 + 47 | `export`, `_to_def`; the record shape in the helper's header | How live objects become `ObjectDef`s. Inherited properties are included only when set locally. |
-| 8 | [world.py](terramoo/world.py) | 286 | `World.load`, `helper`, `bootstrap`, `refs`, `load_files`, `DEFAULT_IGNORE_PROPS` | The glue between config, files and the MOO. Skim the path properties. |
-| 9 | [cli.py](terramoo/cli.py) | 315 | `cmd_apply`, `_plan`, `cmd_pull`/`_write_exports`, `cmd_adopt` | Thin wiring over the modules above. Skip `main`'s argparse block and `WORLD_TOML`. |
+| 5 | [helper/tmoo_registry.moo](terramoo/helper/tmoo_registry.moo) + [tmoo_callback.moo](terramoo/helper/tmoo_callback.moo) | 119 + 11 | Bootstrap/reconcile branches; the callback's `finally` | How callbacks and nested applies protect registry revisions and payloads. |
+| 6 | [helper/tmoo_apply.moo](terramoo/helper/tmoo_apply.moo) | 514 | The branch per op kind, the registry update, `link` | The other half of every op tuple. Read it next to `diff_object`. |
+| 7 | [apply.py](terramoo/apply.py) | 124 | `run`, `_replan_created`, `_resolve_op`, `_send` | The three phases, and why `pending` is cleared between them. |
+| 8 | [export.py](terramoo/export.py) + [helper/tmoo_export.moo](terramoo/helper/tmoo_export.moo) | 70 + 71 | `export`, `_to_def`; the record shape in the helper's header | How live objects become `ObjectDef`s. Inherited properties are included only when set locally. |
+| 9 | [world.py](terramoo/world.py) | 286 | `World.load`, `helper`, `bootstrap`, `refs`, `load_files`, `DEFAULT_IGNORE_PROPS` | The glue between config, files and the MOO. Skim the path properties. |
+| 10 | [cli.py](terramoo/cli.py) | 315 | `cmd_apply`, `_plan`, `cmd_pull`/`_write_exports`, `cmd_adopt` | Thin wiring over the modules above. Skip `main`'s argparse block and `WORLD_TOML`. |
 
 ### Tier 2: read the signatures and the docstrings
 
@@ -351,7 +354,7 @@ in [testbeds/moor/README.md](testbeds/moor/README.md).
 | **registry** | The key → `#n` table on the toolbox. See §1 State ownership. |
 | **sysrefs** | `$name` → object, read from the properties of `#0`. |
 | **toolbox** | An object the player owns, `player.tmoo`, that holds the registry and the helpers. |
-| **helper** | One of the four `tmoo_*` verbs on the toolbox. |
+| **helper** | One of the six `tmoo_*` verbs on the toolbox: registry reconciliation, callback wrapping, export, apply, sysrefs and info. |
 | **op** | A tuple like `("setprop", @hall, "x", 1)`: a branch name in `tmoo_apply` plus its arguments. |
 | **pending** | Keys a plan is about to create; `@key` stays a `Ref` until then. |
 | **gone** | A registry key whose object the MOO no longer has. It gets recreated. |
@@ -465,7 +468,7 @@ config and no CI.
 
 1. [README.md](README.md): the whole thing, especially "Portability notes".
 2. [AGENTS.md](AGENTS.md)
-3. The header comments of the four helpers in [terramoo/helper/](terramoo/helper/)
+3. The header comments of the six helpers in [terramoo/helper/](terramoo/helper/)
 4. [testbeds/lambdamoo/README.md](testbeds/lambdamoo/README.md),
    [testbeds/toaststunt/README.md](testbeds/toaststunt/README.md),
    [testbeds/moor/README.md](testbeds/moor/README.md)

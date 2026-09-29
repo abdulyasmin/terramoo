@@ -60,9 +60,56 @@ elseif (mode == "reconcile")
   if (current[4] > revision)
     revision = current[4];
   endif
-  if (current[4] > before[4] && equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]))
+  payload_changed = !(equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]));
+  if (!payload_changed)
+    if (current[4] > before[4])
+      reg = current;
+    elseif (registry_revision < protected_revision)
+      revision = revision + 1;
+    endif
+  elseif (equal(reg[1], current[1]) && equal(reg[2], current[2]) && equal(reg[3], current[3]))
+    "The callback's own nested tmoo_apply wrote this state; accept it.";
     reg = current;
-  elseif (registry_revision < protected_revision)
+  elseif (protected_revision > before[4])
+    touched = {};
+    i = 0;
+    for old_key in (before[1])
+      i = i + 1;
+      found = 0;
+      j = 0;
+      for new_key in (reg[1])
+        j = j + 1;
+        if (equal(old_key, new_key))
+          found = j;
+        endif
+      endfor
+      if (!found || !equal(before[2][i], reg[2][found]) || !equal(before[3][i], reg[3][found]))
+        touched = setadd(touched, old_key);
+      endif
+    endfor
+    j = 0;
+    for new_key in (reg[1])
+      j = j + 1;
+      found = 0;
+      i = 0;
+      for old_key in (before[1])
+        i = i + 1;
+        if (equal(new_key, old_key))
+          found = i;
+        endif
+      endfor
+      if (!found || !equal(reg[2][j], before[2][found]) || !equal(reg[3][j], before[3][found]))
+        touched = setadd(touched, new_key);
+      endif
+    endfor
+    if (!touched)
+      touched = reg[1];
+    endif
+    this._terramoo_registry_revision = current[4];
+    this._terramoo_registry_state = current;
+    this.registry = current;
+    raise(E_INVARG, tostr("registry conflict during callback; callback touched ", toliteral(touched), "; rerun the operation"));
+  else
     revision = revision + 1;
   endif
   reg[4] = revision;

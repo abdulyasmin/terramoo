@@ -115,10 +115,12 @@ world; `override` is the one keyword of ours.
 ## How it works
 
 - `tmoo bootstrap` creates a *toolbox*, an object the player owns reached as
-  `player.tmoo`, and installs four helper verbs on it from
-  `terramoo/helper/`. They are plain LambdaMOO 1.8, so one copy runs on
-  every server, and they refuse any caller but their owner. Re-run
-  `tmoo bootstrap` after upgrading terramoo to install updated helpers.
+  `player.tmoo`, and installs six helper verbs on it from
+  `terramoo/helper/`: `tmoo_registry`, `tmoo_callback`, `tmoo_export`,
+  `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They are plain LambdaMOO 1.8,
+  so one copy runs on every server, and they refuse any caller but their
+  owner. Re-run `tmoo bootstrap` after upgrading terramoo to install updated
+  helpers.
   Export, adoption and apply check the installed helper version and give that
   bootstrap instruction before sending an incompatible request.
 - The toolbox holds the *registry*, `key -> {#nnn, generation nonce}`, plus a
@@ -146,6 +148,7 @@ world; `override` is the one keyword of ours.
   refuse them. Inspect the live object, then run
   `tmoo adopt '#123' key --verify` to stamp the confirmed binding. Re-run
   `tmoo bootstrap` first when terramoo reports outdated toolbox helpers.
+  Bootstrap migrates the registry in a single non-suspending MOO task.
 - Both transports send one expression per request and parse its
   `toliteral()` text. Telnet tags its answer so other players' chatter is
   ignored (see `terramoo/transport/telnet.py`).

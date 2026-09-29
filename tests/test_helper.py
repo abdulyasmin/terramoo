@@ -116,11 +116,15 @@ quit
     assert "child" in ops[0][2].lower()
 
 
-@pytest.mark.parametrize("callback", ["add", "rebind", "remove", "shift"])
+@pytest.mark.parametrize("callback", ["add", "nested", "rebind", "remove", "shift"])
 def test_destroy_preserves_recycle_callback_registry_changes(offline_moo, tmp_path, callback):
     binary, database = offline_moo
     changes = 'this.toolbox.registry = {{"old", "survivor"}, {this, this.survivor}, {"old-generation", "survivor-generation"}};'
-    if callback == "rebind":
+    if callback == "nested":
+        # The callback registers through the helper itself, which advances the
+        # protected revision; that is not a concurrent writer.
+        changes = 'this.toolbox:tmoo_apply({{"register", "survivor", this.survivor, "survivor-generation"}});'
+    elif callback == "rebind":
         changes = 'this.toolbox.registry = {{"OLD"}, {this.survivor}, {"survivor-generation"}};'
     elif callback == "remove":
         changes = 'this.toolbox.registry = {{"survivor"}, {this.survivor}, {"survivor-generation"}};'
@@ -128,7 +132,7 @@ def test_destroy_preserves_recycle_callback_registry_changes(offline_moo, tmp_pa
         changes = 'this.toolbox.registry = {{"old", "survivor"}, {this, this.survivor}, {"old-generation", "survivor-generation"}};'
     recycle = [changes, "return 1;"]
     expected_key = "OLD" if callback == "rebind" else "survivor"
-    expected_revision = 1 if callback in ("rebind", "remove") else 2
+    expected_revision = 2 if callback in ("rebind", "remove") else 3
     initial = '{{"before", "old"}, {after, old}, {"before-generation", "old-generation"}}' if callback == "shift" else '{{"old"}, {old}, {"old-generation"}}'
     script = f""";;
 tool = create(#-1);
@@ -274,6 +278,86 @@ return {result, tool.registry[1][1], tool.registry[4]};
     assert result[0][0][0] == 1
     assert result[0][1][:2] == [0, "E_INVARG"]
     assert result[1:] == ["other", 1]
+
+
+def test_direct_callback_registry_edit_advances_revision_and_rejects_stale_rename(
+    offline_moo, tmp_path
+):
+    callback = serialize([
+        "saved = this.toolbox.registry;",
+        'this.toolbox.registry = {{"operator_choice", "door"}, saved[2], saved[3], saved[4]};',
+        "this.exits = setadd(this.exits, args[1]);",
+        "return 1;",
+    ])
+    body = """
+existing = create(#-1);
+room = create(#-1);
+door = create($exit);
+add_property(existing, "_terramoo_generation", "existing-generation", {#2, "r"});
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+add_property(room, "toolbox", tool, {#2, ""});
+add_property(room, "exits", {}, {#2, "rw"});
+add_verb(room, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(room, "add_exit", CALLBACK_CODE);
+door.source = room;
+door.dest = #-1;
+tool.registry = {{"old", "door"}, {existing, door}, {"existing-generation", "door-generation"}, 2};
+add_property(tool, "_terramoo_registry_revision", 2, {#2, "r"});
+add_property(tool, "_terramoo_registry_state", tool.registry, {#2, "r"});
+result = tool:tmoo_apply({{"link", {{"door", door, "door-generation"}}}, {"rename", 1, 2, existing, "existing-generation", "stale"}});
+return {result, tool.registry};
+""".replace("CALLBACK_CODE", callback)
+
+    result = _run_helper_script(offline_moo, tmp_path, body)
+
+    registry = registry_value(result[1])
+    assert result[0][0][0] == 1
+    assert result[0][1][:2] == [0, "E_INVARG"]
+    assert list(registry) == ["operator_choice", "door"]
+    assert registry.revision == 3
+
+
+def test_stale_derived_callback_registry_write_reports_conflict_and_keeps_current(
+    offline_moo, tmp_path
+):
+    callback = serialize([
+        "saved = this.toolbox.registry;",
+        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+        'this.toolbox.registry = {{@saved[1], "callback"}, {@saved[2], this.callback_object}, {@saved[3], "callback-generation"}, saved[4]};',
+        "this.exits = setadd(this.exits, args[1]);",
+        "return 1;",
+    ])
+    body = """
+existing = create(#-1);
+other = create(#-1);
+callback_object = create(#-1);
+room = create(#-1);
+door = create($exit);
+add_property(existing, "_terramoo_generation", "existing-generation", {#2, "r"});
+add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
+add_property(room, "toolbox", tool, {#2, ""});
+add_property(room, "other", other, {#2, ""});
+add_property(room, "callback_object", callback_object, {#2, ""});
+add_property(room, "exits", {}, {#2, "rw"});
+add_verb(room, {#2, "xd", "add_exit"}, {"this", "none", "this"});
+set_verb_code(room, "add_exit", CALLBACK_CODE);
+door.source = room;
+door.dest = #-1;
+tool.registry = {{"existing", "door"}, {existing, door}, {"existing-generation", "door-generation"}, 2};
+add_property(tool, "_terramoo_registry_revision", 2, {#2, "r"});
+add_property(tool, "_terramoo_registry_state", tool.registry, {#2, "r"});
+result = tool:tmoo_apply({{"link", {{"door", door, "door-generation"}}}});
+return {result, tool.registry};
+""".replace("CALLBACK_CODE", callback)
+
+    result = _run_helper_script(offline_moo, tmp_path, body)
+
+    registry = registry_value(result[1])
+    assert result[0][0][:2] == [0, "E_INVARG"]
+    assert "registry conflict" in result[0][0][2].lower()
+    assert "callback" in result[0][0][2]
+    assert set(registry) == {"existing", "door", "other"}
+    assert registry.revision == 3
 
 
 @pytest.mark.parametrize("protected", [False, True], ids=["legacy", "protected"])
@@ -460,7 +544,7 @@ return {{result, tool.registry, tool._terramoo_registry_revision}};
     assert registry.revision == result[2] == 7
 
 
-def test_create_preserves_case_only_callback_registry_rewrite(offline_moo, tmp_path):
+def test_create_rejects_case_only_stale_callback_registry_rewrite(offline_moo, tmp_path):
     initialize = serialize([
         "saved = this.toolbox.registry;",
         'this.toolbox:tmoo_apply({{"rename", 1, 2, this.existing, "existing-generation", "task_b"}});',
@@ -485,9 +569,11 @@ return {result, tool.registry, tool._terramoo_registry_revision};
     result = _run_helper_script(offline_moo, tmp_path, body)
 
     registry = registry_value(result[1])
-    assert result[0][0][0] == 1
-    assert list(registry) == ["EXISTING", "child"]
-    assert registry.revision == result[2] == 5
+    assert result[0][0][:2] == [0, "E_INVARG"]
+    assert "registry conflict" in result[0][0][2].lower()
+    assert "existing" in result[0][0][2].lower()
+    assert list(registry) == ["task_b"]
+    assert registry.revision == result[2] == 3
 
 
 def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):
