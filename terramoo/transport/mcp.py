@@ -61,13 +61,16 @@ class McpTransport(Transport):
             raise MooError(f"HTTP {e.code} from {self.url}: {e.read().decode()[:300]}") from None
         except urllib.error.URLError as e:
             raise MooError(f"cannot reach {self.url}: {e.reason}") from None
-        if "text/event-stream" in ctype:
-            payloads = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
-            if not payloads:
-                raise MooError(f"empty event stream from {self.url}")
-            msg = json.loads(payloads[-1])
-        else:
-            msg = json.loads(raw)
+        try:
+            if "text/event-stream" in ctype:
+                payloads = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+                if not payloads:
+                    raise MooError(f"empty event stream from {self.url}")
+                msg = json.loads(payloads[-1])
+            else:
+                msg = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise MooError(f"invalid JSON-RPC response from {self.url}: {e.msg}") from None
         if "error" in msg:
             raise MooError(f"{method}: {msg['error'].get('message', msg['error'])}")
         return msg["result"]
