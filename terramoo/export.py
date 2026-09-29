@@ -24,7 +24,7 @@ def _verb_args(args: list[str]) -> bool:
     return (
         args[0] in ("none", "any", "this")
         and args[2] in ("none", "any", "this")
-        and all(arg and not any(c.isspace() for c in arg) for arg in args)
+        and all(_one_line(arg, nonempty=True) and arg == arg.strip() for arg in args)
     )
 
 
@@ -93,18 +93,22 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
             isinstance(prop, list)
             and len(prop) == 5
             and isinstance(prop[0], str)
-            and type(prop[1]) is int
+            and _one_line(prop[0], nonempty=True)
+        ):
+            raise MooError(f"tmoo_export returned a malformed property record for {key}")
+        pname = prop[0]
+        if pname in ignore:
+            continue
+        if not (
+            type(prop[1]) is int
             and prop[1] in (0, 1)
             and isinstance(prop[2], Obj)
             and isinstance(prop[3], str)
             and isinstance(prop[4], str)
-            and _one_line(prop[0], nonempty=True)
             and _alphabet(prop[3], "rwc")
         ):
             raise MooError(f"tmoo_export returned a malformed property record for {key}")
         pname, defined, powner, perms, literal = prop
-        if pname in ignore:
-            continue
         try:
             value = moolit.parse(literal, dialect=dialect)
         except moolit.LiteralError as e:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import cli, export as export_mod, moolit, objdef
+from terramoo import cli, export as export_mod, moolit, objdef, plan
 from terramoo.errors import MooError
 from terramoo.model import PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
@@ -153,6 +153,79 @@ def test_valid_export_record_renders_and_parses_round_trip():
 
     assert exported.props[0].value == "hello\nworld"
     assert objdef.parse(objdef.render(exported)) == exported
+
+
+@pytest.mark.parametrize("dialect", [moolit.LAMBDA, moolit.MOOR])
+def test_export_render_parse_plan_is_empty_for_escaped_names(dialect):
+    obj = Obj(10)
+    odd_name = 'name\t"quoted"\\café'
+    record = [
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [[odd_name, 1, Obj(1), "rc", "1"]],
+        [[odd_name, Obj(1), "rd", ["this", "none", "this"], ["return 1;"]]],
+    ]
+    world = ExportWorld({obj: record})
+    world.transport = SimpleNamespace(literal_dialect=dialect)
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    exported = export_mod.export(world, refs, ["hall"])["hall"]
+    reloaded = objdef.parse(objdef.render(exported))
+    result = plan.build({"hall": reloaded}, {"hall": exported}, refs)
+
+    assert reloaded == exported
+    assert result.empty
+    assert result.unchanged == ["hall"]
+
+
+@pytest.mark.parametrize("dialect", [moolit.LAMBDA, moolit.MOOR])
+def test_export_render_parse_plan_is_empty_for_canonical_multiword_preposition(dialect):
+    obj = Obj(10)
+    record = [
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [],
+        [["put", Obj(1), "rd", ["any", "on top of/on/onto/upon", "this"], ["return 1;"]]],
+    ]
+    world = ExportWorld({obj: record})
+    world.transport = SimpleNamespace(literal_dialect=dialect)
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    exported = export_mod.export(world, refs, ["hall"])["hall"]
+    reloaded = objdef.parse(objdef.render(exported))
+    result = plan.build({"hall": reloaded}, {"hall": exported}, refs)
+
+    assert reloaded == exported
+    assert result.empty
+    assert result.unchanged == ["hall"]
+
+
+def test_export_skips_ignored_private_property_before_validating_unreadable_fields():
+    obj = Obj(10)
+    record = [
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [["password", 1, Obj(-1), "?", "E_PERM"]],
+        [],
+    ]
+    world = ExportWorld({obj: record}, ignore_props={"password"})
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    exported = export_mod.export(world, refs, ["hall"])["hall"]
+
+    assert exported.props == []
 
 
 def test_malformed_nested_verb_code_never_reaches_the_writer():

@@ -24,11 +24,12 @@ class FormatError(ValueError):
 
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_QUOTED_IDENT = r'"(?:[^"\\]|\\.)*"'
 _HEAD_RE = re.compile(rf"^object\s+({_IDENT})\s*$")
 _FIELD_RE = re.compile(rf"^\s*({_IDENT}):\s*(.*?)\s*$")
-_PROP_RE = re.compile(r'^\s*property\s+(?:"([^"]+)"|(\S+))\s*\((.*?)\)\s*=\s*(.*)$', re.S)
-_OVERRIDE_RE = re.compile(r'^\s*override\s+(?:"([^"]+)"|(\S+))\s*=\s*(.*)$', re.S)
-_VERB_RE = re.compile(r'^\s*verb\s+(?:"([^"]+)"|(\S+))\s*\((\S+)\s+(\S+)\s+(\S+)\)\s*(.*?)\s*$')
+_PROP_RE = re.compile(rf'^\s*property\s+({_QUOTED_IDENT}|\S+)\s*\((.*?)\)\s*=\s*(.*)$', re.S)
+_OVERRIDE_RE = re.compile(rf'^\s*override\s+({_QUOTED_IDENT}|\S+)\s*=\s*(.*)$', re.S)
+_VERB_RE = re.compile(rf'^\s*verb\s+({_QUOTED_IDENT}|\S+)\s*\((\S+)\s+(.+?)\s+(\S+)\)\s*(.*?)\s*$')
 _OPT_RE = re.compile(r'(\w+):\s*("(?:[^"\\]|\\.)*"|\S+)')
 
 
@@ -47,6 +48,10 @@ def _quoted(text: str) -> str:
     if not isinstance(v, str):
         raise FormatError(f"expected a string, got {text!r}")
     return v
+
+
+def _parse_ident(text: str) -> str:
+    return _quoted(text) if text.startswith('"') else text
 
 
 def parse(text: str) -> ObjectDef:
@@ -76,8 +81,8 @@ def parse(text: str) -> ObjectDef:
             vm = _VERB_RE.match(raw)
             if not vm:
                 raise FormatError(f"line {i + 1}: bad verb header")
-            names = vm.group(1) or vm.group(2)
-            opts = dict(_OPT_RE.findall(vm.group(6)))
+            names = _parse_ident(vm.group(1))
+            opts = dict(_OPT_RE.findall(vm.group(5)))
             code = []
             i += 1
             while i < n and lines[i].strip() != "endverb":
@@ -90,7 +95,7 @@ def parse(text: str) -> ObjectDef:
                 VerbDef(
                     names=names,
                     code=code,
-                    args=(vm.group(3), vm.group(4), vm.group(5)),
+                    args=(vm.group(2), vm.group(3), vm.group(4)),
                     perms=_quoted(opts["flags"]) if "flags" in opts else "rxd",
                     owner=_parse_ref(opts["owner"]) if "owner" in opts else None,
                 )
@@ -101,11 +106,11 @@ def parse(text: str) -> ObjectDef:
             stmt, i = _read_statement(lines, i)
             pm = _PROP_RE.match(stmt)
             if pm:
-                opts = dict(_OPT_RE.findall(pm.group(3)))
+                opts = dict(_OPT_RE.findall(pm.group(2)))
                 obj.props.append(
                     PropDef(
-                        name=pm.group(1) or pm.group(2),
-                        value=moolit.parse(pm.group(4), dialect=LITERAL_DIALECT),
+                        name=_parse_ident(pm.group(1)),
+                        value=moolit.parse(pm.group(3), dialect=LITERAL_DIALECT),
                         perms=_quoted(opts["flags"]) if "flags" in opts else "rc",
                         owner=_parse_ref(opts["owner"]) if "owner" in opts else None,
                     )
@@ -115,8 +120,8 @@ def parse(text: str) -> ObjectDef:
             if om:
                 obj.props.append(
                     PropDef(
-                        name=om.group(1) or om.group(2),
-                        value=moolit.parse(om.group(3), dialect=LITERAL_DIALECT),
+                        name=_parse_ident(om.group(1)),
+                        value=moolit.parse(om.group(2), dialect=LITERAL_DIALECT),
                         defined=False,
                     )
                 )
