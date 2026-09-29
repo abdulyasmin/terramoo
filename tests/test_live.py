@@ -76,6 +76,61 @@ def run(capsys, *argv):
     return capsys.readouterr().out
 
 
+@pytest.mark.parametrize("key", ["tmoo_test_occupied", "TMOO_TEST_OCCUPIED"])
+def test_register_helper_refuses_to_rebind_an_occupied_key(world, key):
+    create = [["create", "tmoo_test_occupied", world.eval("$thing"), "occupied key test"]]
+    result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
+    assert result[0][0] == 1
+    reg = world.read_registry()
+    fresh = world.eval("create($thing)")
+    try:
+        assert fresh not in reg.values()
+        register = [["register", key, fresh]]
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(register)))
+        assert result[0][0:2] == [0, "E_INVARG"]
+        assert world.read_registry() == reg
+        assert world.eval(f"valid({fresh})")
+    finally:
+        # Restore the original binding even if a broken helper rebound it.
+        world.transport.set_prop(world.toolbox, "registry", [list(reg), list(reg.values())])
+        world.eval(f"valid({fresh}) ? recycle({fresh}) | 0")
+
+
+@pytest.mark.parametrize("already_gone", [False, True])
+def test_destroy_helper_is_idempotent(world, already_gone):
+    key = "tmoo_test_destroy"
+    create = [["create", key, world.eval("$thing"), "destroy test"]]
+    result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
+    assert result[0][0] == 1
+    reg = world.read_registry()
+    obj = reg.pop(key)
+    if already_gone:
+        world.eval(f"recycle({obj})")
+    destroy = [["destroy", key, obj]]
+    for _ in range(2):
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(destroy)))
+        assert result == [[1, 1]]
+        assert not world.eval(f"valid({obj})")
+        assert world.read_registry() == reg
+
+
+def test_destroy_helper_rejects_a_changed_registration(world):
+    key = "tmoo_test_changed"
+    create = [["create", key, world.eval("$thing"), "changed registration test"]]
+    result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
+    assert result[0][0] == 1
+    reg = world.read_registry()
+    stale = world.eval("create($thing)")
+    try:
+        destroy = [["destroy", key, stale]]
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(destroy)))
+        assert result[0][0:2] == [0, "E_INVARG"]
+        assert world.read_registry() == reg
+        assert world.eval(f"valid({reg[key]}) && valid({stale})")
+    finally:
+        world.eval(f"valid({stale}) ? recycle({stale}) | 0")
+
+
 def test_round_trip(world, capsys):
     (world.objects_dir / "tmoo_test_hall.moo").write_text(HALL)
     (world.objects_dir / "tmoo_test_door.moo").write_text(DOOR)

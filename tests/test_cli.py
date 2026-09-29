@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -201,10 +200,18 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
     assert world.saved == [{"Hall": Obj(10), "hall_2": Obj(11)}]
 
 
-def test_register_helper_refuses_to_rebind_an_occupied_key():
-    source = (Path(__file__).parents[1] / "terramoo/helper/tmoo_apply.moo").read_text()
+@pytest.mark.parametrize("key", ["hall", "HALL"])
+def test_adopt_refuses_to_rebind_an_occupied_key(monkeypatch, key):
+    world = AdoptWorld({"hall": Obj(10)})
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", lambda *args: pytest.fail("occupied key was exported"))
 
-    assert 'if (i && reg[2][i] != r)' in source
+    with pytest.raises(MooError, match=rf"{key} is already #10"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#11", key=key))
+
+    assert world.sent == []
+    assert world.raw_registry == [["hall"], [Obj(10)]]
+    assert world.saved == []
 
 
 def test_adopt_failed_registration_exports_nothing_and_raises(monkeypatch):
