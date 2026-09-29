@@ -17,6 +17,7 @@ class FakeWorld:
         self.registry: dict[str, Obj] = {}
         self.names: dict[Obj, tuple[str, Obj]] = {}
         self.sent: list = []
+        self.batches: list[list] = []
         self.transport = SimpleNamespace(batch_bytes=24_000)
         self.ignore_props: set[str] = set()
 
@@ -35,10 +36,14 @@ class FakeWorld:
         moolit.walk(value, no_refs)
         if verb == "tmoo_export":
             return [[o, *self.names[o], Obj(-1), ME, "", [], []] for o in value]
+        self.batches.append(value)
         return [self._op(op) for op in value]
 
     def _op(self, op):
         self.sent.append(op)
+        if op[0] == "unregister":
+            self.registry.pop(op[1], None)
+            return [1, 1]
         if op[0] != "create":
             return [1, 1]
         key, parent, name = op[1:]
@@ -87,3 +92,60 @@ def test_a_failed_create_skips_only_the_ops_that_need_it():
     assert failed == {"create guard (Guard)", "addprop @hall.guard", "move @guard @hall"}
     assert w.sent[-1] == ["link", [w.registry["hall"]]]
     assert w.saved == {"hall": w.registry["hall"]}
+
+
+def test_orphans_are_only_recycled_when_destroy_is_explicit():
+    old = Obj(201)
+    p = plan.Plan(destroys=["old"])
+
+    kept = FakeWorld()
+    kept.registry = {"old": old}
+    kept_refs = Refs(player=ME, registry={"old": old})
+    apply.run(kept, p, kept_refs, files={}, log=lambda _: None)
+    assert kept.sent == []
+    assert kept.saved == {"old": old}
+
+    destroyed = FakeWorld()
+    destroyed.registry = {"old": old}
+    destroyed_refs = Refs(player=ME, registry={"old": old})
+    outcome = apply.run(destroyed, p, destroyed_refs, files={}, destroy=True, log=lambda _: None)
+    assert outcome.failed == []
+    assert destroyed.sent == [["recycle", old], ["unregister", "old"]]
+    assert destroyed_refs.registry == {}
+    assert destroyed.saved == {}
+
+
+def test_ops_are_split_before_the_configured_batch_limit():
+    hall = Obj(200)
+    w = FakeWorld()
+    w.registry = {"hall": hall}
+    refs = Refs(player=ME, registry={"hall": hall})
+    ops = [("name", Ref("@", "hall"), "A"), ("name", Ref("@", "hall"), "B")]
+    w.transport.batch_bytes = len(moolit.serialize(["name", hall, "A"]))
+
+    outcome = apply.run(w, plan.Plan(ops=ops), refs, files={}, log=lambda _: None)
+    assert outcome.failed == []
+    assert w.batches == [[["name", hall, "A"]], [["name", hall, "B"]]]
+
+
+def test_a_short_result_list_is_reported_and_state_is_still_saved():
+    class ShortReplyWorld(FakeWorld):
+        def eval(self, call):
+            verb, text = call
+            if verb == "tmoo_apply":
+                value = moolit.parse(text)
+                self.batches.append(value)
+                self.sent.extend(value)
+                return [[1, 1]]
+            return super().eval(call)
+
+    hall = Obj(200)
+    w = ShortReplyWorld()
+    w.registry = {"hall": hall}
+    refs = Refs(player=ME, registry={"hall": hall})
+    p = plan.Plan(ops=[("name", Ref("@", "hall"), "A"), ("flags", Ref("@", "hall"), "r")])
+
+    outcome = apply.run(w, p, refs, files={}, log=lambda _: None)
+    assert outcome.done == ["name @hall A"]
+    assert outcome.failed == [("batch", "2 ops sent, 1 results")]
+    assert w.saved == {"hall": hall}
