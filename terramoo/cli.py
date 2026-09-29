@@ -22,6 +22,12 @@ from .world import World, find_root
 _open: list[World] = []
 
 
+def _registry_key(refs, name: str) -> str | None:
+    if hasattr(refs, "registry_key"):
+        return refs.registry_key(name)
+    return next((key for key in refs.registry if key.lower() == name.lower()), None)
+
+
 def _world(args) -> World:
     w = World.load(find_root(), args.world)
     _open.append(w)
@@ -85,14 +91,15 @@ def cmd_status(args):
     print(f"registry: {len(refs.registry)} objects, files: {len(files)}")
     for key, o in sorted(refs.registry.items()):
         notes = []
-        if key not in files:
+        if key.lower() not in {name.lower() for name in files}:
             notes.append("no file")
         if not refs.generations.get(key):
             notes.append("unverified; use adopt --verify")
         mark = f"  ({'; '.join(notes)})" if notes else ""
         print(f"  {key:32} {o}{mark}")
-    for key in sorted(set(files) - set(refs.registry)):
-        print(f"  {key:32} (not created yet)")
+    for key in sorted(files):
+        if refs.registry_key(key) is None:
+            print(f"  {key:32} (not created yet)")
     if owned is None:
         print("(this core keeps no owned_objects list, so unmanaged objects are not listed)")
         return
@@ -111,13 +118,20 @@ def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
 def _write_exports(w: World, refs, keys) -> int:
     """Write the files for `keys` from the live objects; how many were written."""
     live = export_mod.export(w, refs, keys)
+    existing = {path.stem.lower(): path.stem for path in w.objects_dir.glob("*.moo")}
     written = 0
     for key in keys:
-        obj = live.get(key)
+        actual_key = _registry_key(refs, key) or key
+        obj = live.get(actual_key)
         if obj is None:
-            print(f"  {key}: registry names {refs.registry[key]} but the MOO has no such object", file=sys.stderr)
+            print(
+                f"  {actual_key}: registry names {refs.registry[actual_key]} but the MOO has no such object",
+                file=sys.stderr,
+            )
             continue
-        path = w.file_for(key)
+        file_key = existing.get(actual_key.lower(), actual_key)
+        obj.key = file_key
+        path = w.file_for(file_key)
         if path.exists():
             try:
                 ordered_like(obj, objdef.parse(path.read_text()))
@@ -131,10 +145,11 @@ def _write_exports(w: World, refs, keys) -> int:
 def cmd_pull(args):
     w = _world(args)
     refs = w.refs()
-    keys = args.keys or sorted(refs.registry)
-    missing = [k for k in keys if k not in refs.registry]
+    requested = args.keys or sorted(refs.registry)
+    missing = [k for k in requested if refs.registry_key(k) is None]
     if missing:
         raise MooError(f"not in the registry: {', '.join(missing)}")
+    keys = [refs.registry_key(key) for key in requested]
     written = _write_exports(w, refs, keys)
     w.save_state(refs.snapshot())
     print(f"wrote {written} file(s) under {w.objects_dir.relative_to(w.root)}")
@@ -251,7 +266,11 @@ def parse_object_arg(text: str) -> Obj:
 def _plan(w: World):
     refs = w.refs()
     files = w.load_files()
-    live = export_mod.export(w, refs, [k for k in files if k in refs.registry])
+    live = export_mod.export(
+        w,
+        refs,
+        [registry_key for key in files if (registry_key := refs.registry_key(key)) is not None],
+    )
     return refs, files, plan_mod.build(files, live, refs)
 
 
@@ -309,12 +328,25 @@ def cmd_diff(args):
     w = _world(args)
     refs = w.refs()
     files = w.load_files()
-    keys = args.keys or sorted(set(files) | set(refs.registry))
-    live = export_mod.export(w, refs, [k for k in keys if k in refs.registry])
+    if args.keys:
+        keys = args.keys
+    else:
+        keys = list(files)
+        keys.extend(key for key in refs.registry if key.lower() not in {name.lower() for name in files})
+    live_keys = [registry_key for key in keys if (registry_key := refs.registry_key(key)) is not None]
+    live = export_mod.export(w, refs, live_keys)
+    files_by_name = {key.lower(): key for key in files}
+    live_by_name = {key.lower(): key for key in live}
     changed = 0
     for key in keys:
-        a = objdef.render(live[key]).splitlines(keepends=True) if live.get(key) else []
-        b = objdef.render(files[key]).splitlines(keepends=True) if key in files else []
+        file_key = files_by_name.get(key.lower())
+        live_key = live_by_name.get(key.lower())
+        live_obj = live.get(live_key) if live_key is not None else None
+        file_obj = files.get(file_key) if file_key is not None else None
+        if live_obj is not None and file_obj is not None:
+            live_obj.key = file_obj.key
+        a = objdef.render(live_obj).splitlines(keepends=True) if live_obj else []
+        b = objdef.render(file_obj).splitlines(keepends=True) if file_obj else []
         if a == b:
             continue
         changed += 1

@@ -164,7 +164,10 @@ for op in (ops)
           src = `o.source ! ANY => #-1';
           dst = `o.dest ! ANY => #-1';
           if (valid(src) && !(o in `src.exits ! ANY => {}'))
-            `src:add_exit(o) ! ANY => 0';
+            src:add_exit(o);
+            if (!(o in `src.exits ! ANY => {}'))
+              raise(E_INVARG, tostr("exit ", o, " was not added to ", src, ".exits"));
+            endif
             linked = {@linked, {o, "exit", src}};
           endif
           reg = this.registry;
@@ -173,7 +176,10 @@ for op in (ops)
             raise(E_INVARG, tostr("key ", key, " changed during link"));
           endif
           if (valid(dst) && !(o in `dst.entrances ! ANY => {}'))
-            `dst:add_entrance(o) ! ANY => 0';
+            dst:add_entrance(o);
+            if (!(o in `dst.entrances ! ANY => {}'))
+              raise(E_INVARG, tostr("exit ", o, " was not added to ", dst, ".entrances"));
+            endif
             linked = {@linked, {o, "entrance", dst}};
           endif
         endif
@@ -208,6 +214,22 @@ for op in (ops)
         o.(op[5]) = op[6];
       elseif (kind == "clearprop")
         clear_property(o, op[5]);
+      elseif (kind == "unlink")
+        relation = op[5];
+        room = typeof(op[6]) == typeof(#0) ? op[6] | #-1;
+        if (valid(room) && relation == "exit" && o in `room.exits ! ANY => {}')
+          room:remove_exit(o);
+          if (o in `room.exits ! ANY => {}')
+            raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".exits"));
+          endif
+        elseif (valid(room) && relation == "entrance" && o in `room.entrances ! ANY => {}')
+          room:remove_entrance(o);
+          if (o in `room.entrances ! ANY => {}')
+            raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".entrances"));
+          endif
+        elseif (relation != "exit" && relation != "entrance")
+          raise(E_INVARG, tostr("unknown unlink relation ", relation));
+        endif
       elseif (kind == "addverb" || kind == "verbcode")
         if (kind == "addverb")
           add_verb(o, op[5], op[6]);

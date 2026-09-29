@@ -264,9 +264,21 @@ def serialize(value, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str
 
 
 def walk(value, fn):
-    """Rebuild `value` with `fn` applied to every leaf (lists and maps recursed)."""
+    """Rebuild `value` with `fn` applied to every leaf.
+
+    Map keys are values too.  A MOO list used as a map key is represented by
+    a tuple in Python so it remains hashable while its elements are walked.
+    """
     if isinstance(value, Map):
-        return Map((k, walk(v, fn)) for k, v in value.items())
+        out = Map()
+        for key, item in value.items():
+            new_key = walk(key, fn)
+            if new_key in out:
+                raise LiteralError(f"map key collision after transformation: {new_key!r}")
+            out[new_key] = walk(item, fn)
+        return out
     if isinstance(value, list):
         return [walk(v, fn) for v in value]
+    if isinstance(value, tuple):
+        return tuple(walk(v, fn) for v in value)
     return fn(value)

@@ -45,15 +45,18 @@ class Refs:
         to the key itself until the create has run."""
         if isinstance(ref, Ref):
             if ref.kind == "@":
-                if ref.name == "me":
+                if ref.name.lower() == "me":
                     return self.player
-                if ref.name in self.registry and (live or ref.name not in self.pending):
-                    return self.registry[ref.name]
-                if ref.name in self.pending:
+                key = self.registry_key(ref.name)
+                pending = ref.name.lower() in self._pending_folded()
+                if key is not None and (live or not pending):
+                    return self.registry[key]
+                if pending:
                     return ref
                 raise UnresolvedRef(f"@{ref.name} is not in the registry")
-            if ref.name in self.sysrefs:
-                return self.sysrefs[ref.name]
+            sysname = self._sys_by_name.get(ref.name.lower())
+            if sysname is not None:
+                return self.sysrefs[sysname]
             raise UnresolvedRef(f"${ref.name} is not a corified object on this MOO")
         return ref
 
@@ -82,6 +85,17 @@ class Refs:
             self.generations = dict(self.registry.generations)
         self.reindex()
 
+    def registry_key(self, name: str) -> str | None:
+        """The registry's preserved spelling for MOO's case-insensitive name."""
+        return self._registry_by_name.get(name.lower())
+
+    def generation_for(self, name: str) -> str | None:
+        key = self.registry_key(name)
+        return self.generations.get(key) if key is not None else None
+
+    def _pending_folded(self) -> set[str]:
+        return {name.lower() for name in self.pending}
+
     def replace_registry(self, registry: dict[str, Obj]) -> None:
         self.registry = dict(registry)
         self.generations = dict(getattr(registry, "generations", {}))
@@ -91,6 +105,17 @@ class Refs:
         return Registry(self.registry, self.generations)
 
     def reindex(self):
+        self._registry_by_name = {}
+        for name in self.registry:
+            folded = name.lower()
+            if folded in self._registry_by_name:
+                raise ValueError(
+                    f"registry keys {self._registry_by_name[folded]!r} and {name!r} differ only in case"
+                )
+            self._registry_by_name[folded] = name
+        self._sys_by_name = {}
+        for name in self.sysrefs:
+            self._sys_by_name.setdefault(name.lower(), name)
         self._by_obj = {o: n for n, o in self.registry.items()}
         # Prefer the shortest $name when several point at one object.
         self._sys_by_obj = {}

@@ -30,6 +30,9 @@ class VerbDef:
     args: tuple[str, str, str] = ("this", "none", "this")  # dobj, prep, iobj
     perms: str = "rxd"
     owner: Obj | Ref | None = None
+    # Present only on live exports.  MOO verb names are not unique; mutations
+    # must use the numeric descriptor returned by verbs().
+    live_index: int | None = field(default=None, compare=False)
 
     @property
     def key(self) -> str:
@@ -53,13 +56,24 @@ def ordered_like(obj: ObjectDef, template: ObjectDef) -> ObjectDef:
     after, in their own order.  Servers list inherited properties in
     different orders; a pull should not reshuffle a file for that."""
     def rank(names: list[str]):
-        pos = {n: i for i, n in enumerate(names)}
-        return lambda item_name: pos.get(item_name, len(pos))
+        positions: dict[str, list[int]] = {}
+        for i, name in enumerate(names):
+            positions.setdefault(name.lower(), []).append(i)
+        used: dict[str, int] = {}
+
+        def item_rank(item_name: str):
+            folded = item_name.lower()
+            occurrence = used.get(folded, 0)
+            used[folded] = occurrence + 1
+            matches = positions.get(folded, [])
+            return matches[occurrence] if occurrence < len(matches) else len(names)
+
+        return item_rank
 
     prop_rank = rank([p.name for p in template.props])
-    verb_rank = rank([v.key for v in template.verbs])
+    verb_rank = rank([v.names for v in template.verbs])
     obj.props.sort(key=lambda p: prop_rank(p.name))  # stable: new ones keep their order
-    obj.verbs.sort(key=lambda v: verb_rank(v.key))
+    obj.verbs.sort(key=lambda v: verb_rank(v.names))
     return obj
 
 

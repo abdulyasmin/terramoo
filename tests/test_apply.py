@@ -168,6 +168,66 @@ def test_mutation_is_rejected_when_the_key_was_rebound_after_planning():
     assert outcome.failed == [("name @hall New Hall", "E_INVARG: key hall was rebound")]
 
 
+def test_exit_reconciliation_failures_from_the_fake_helper_are_reported():
+    hall, old_source, new_source = Obj(10), Obj(11), Obj(12)
+
+    class FailingExitWorld(FakeWorld):
+        def _op(self, op):
+            self.sent.append(op)
+            if op[0] == "unlink":
+                return [0, "E_PERM", "remove_exit refused"]
+            if op[0] == "link":
+                return [0, "E_INVARG", "exit absent after add_exit"]
+            return [1, 1]
+
+    w = FailingExitWorld()
+    refs = verify_bindings(w, {"hall": hall, "old_source": old_source, "new_source": new_source})
+    want = ObjectDef(
+        key="hall", name="Hall", parent=Obj(3),
+        props=[PropDef("source", Ref("@", "new_source"), defined=False)],
+    )
+    have = ObjectDef(
+        key="hall", name="Hall", parent=Obj(3),
+        props=[PropDef("source", Ref("@", "old_source"), defined=False)],
+    )
+    ops = plan.diff_object("hall", want, have, refs)
+    ops.append(("link", [Ref("@", "hall")]))
+
+    outcome = apply.run(w, plan.Plan(ops=ops), refs, files={"hall": want}, log=lambda _: None)
+
+    assert [op[0] for op in w.sent] == ["unlink", "link"]
+    assert outcome.failed == [
+        ("unlink @hall exit #11", "E_PERM: remove_exit refused"),
+        ("setprop @hall.source", "prerequisite unlink @hall exit #11 failed"),
+        ("link exits among 1 objects", "E_INVARG: exit absent after add_exit"),
+    ]
+
+
+def test_successful_exit_unlink_allows_the_endpoint_mutation():
+    hall, old_dest, new_dest = Obj(10), Obj(11), Obj(12)
+    w = FakeWorld()
+    refs = verify_bindings(w, {"hall": hall, "old_dest": old_dest, "new_dest": new_dest})
+    want = ObjectDef(
+        key="hall", name="Hall", parent=Obj(3),
+        props=[PropDef("dest", Ref("@", "new_dest"), defined=False)],
+    )
+    have = ObjectDef(
+        key="hall", name="Hall", parent=Obj(3),
+        props=[PropDef("dest", Ref("@", "old_dest"), defined=False)],
+    )
+
+    outcome = apply.run(
+        w,
+        plan.Plan(ops=plan.diff_object("hall", want, have, refs)),
+        refs,
+        files={"hall": want},
+        log=lambda _: None,
+    )
+
+    assert outcome.failed == []
+    assert [op[0] for op in w.sent] == ["unlink", "setprop"]
+
+
 def test_orphans_are_only_recycled_when_destroy_is_explicit():
     old = Obj(201)
     p = plan.Plan(destroys={"old": old})
@@ -344,6 +404,24 @@ def test_ops_are_split_before_the_configured_batch_limit():
     outcome = apply.run(w, plan.Plan(ops=ops), refs, files={}, log=lambda _: None)
     assert outcome.failed == []
     assert w.batches == [[first], [second]]
+
+
+def test_verb_name_is_logged_while_numeric_descriptor_is_sent_to_helper():
+    hall = Obj(200)
+    w = FakeWorld()
+    refs = verify_bindings(w, {"hall": hall})
+    op = (
+        "verbcode",
+        Ref("@", "hall"),
+        plan.VerbTarget(1, "bow"),
+        ["return 2;"],
+    )
+
+    outcome = apply.run(w, plan.Plan(ops=[op]), refs, files={}, log=lambda _: None)
+
+    assert outcome.failed == []
+    assert outcome.done == ["verbcode @hall.bow"]
+    assert w.sent == [["verbcode", "hall", hall, "generation-hall", 1, ["return 2;"]]]
 
 
 def test_apply_encodes_strings_for_the_moor_dialect():

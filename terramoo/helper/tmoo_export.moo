@@ -1,7 +1,7 @@
 ":tmoo_export(bindings [, may_suspend]) => one record per {key, object, generation}, for terramoo's exporter:";
 "  {obj, name, parent, location, owner, flags, props, verbs}, or {obj} for an invalid one.";
 "  props: {{name, defined, owner, perms, toliteral(value)}, ...}; inherited ones only when set here.";
-"  verbs: {{names, owner, perms, {dobj, prep, iobj}, code}, ...}.";
+"  verbs: {{names, owner, perms, {dobj, prep, iobj}, code, numeric descriptor}, ...}.";
 "Plain LambdaMOO 1.8 -- no maps, ancestors(), core utilities or type constants (mooR spells them TYPE_OBJ) -- so it runs on every server.";
 if (caller_perms() != this.owner && !caller_perms().wizard)
   raise(E_PERM);
@@ -60,7 +60,7 @@ for binding in (bindings)
     info = `verb_info(o, i) ! ANY => {#-1, "?", vname}';
     vargs = `verb_args(o, i) ! ANY => {"?", "?", "?"}';
     code = `verb_code(o, i) ! ANY => {}';
-    vrbs = {@vrbs, {info[3], info[1], info[2], vargs, code}};
+    vrbs = {@vrbs, {info[3], info[1], info[2], vargs, code, i}};
   endfor
   flags = tostr(o.r ? "r" | "", o.w ? "w" | "", o.f ? "f" | "");
   out = {@out, {o, o.name, parent(o), o.location, o.owner, flags, props, vrbs}};

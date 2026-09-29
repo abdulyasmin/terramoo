@@ -14,6 +14,22 @@ def test_pending_refs_keep_file_values_symbolic_but_resolve_live_values():
     assert refs.resolve(value, live=True) == [Obj(10), Map({"destination": Obj(10)})]
 
 
+def test_map_keys_are_symbolized_and_resolved_including_list_keys():
+    refs = Refs(player=Obj(1), registry={"door": Obj(10)})
+    live = Map({Obj(10): "object", (Obj(10), "north"): "list"})
+    symbolic = Map({Ref("@", "door"): "object", (Ref("@", "door"), "north"): "list"})
+
+    assert refs.symbolize(live) == symbolic
+    assert refs.resolve(symbolic) == live
+
+
+def test_map_key_transforms_reject_collisions():
+    refs = Refs(player=Obj(1), registry={"door": Obj(10)})
+
+    with pytest.raises(ValueError, match="map key collision"):
+        refs.resolve(Map({Ref("@", "door"): 1, Obj(10): 2}))
+
+
 def test_resolve_rejects_unknown_managed_and_system_refs():
     refs = Refs(player=Obj(1))
 
@@ -21,6 +37,14 @@ def test_resolve_rejects_unknown_managed_and_system_refs():
         refs.resolve_ref(Ref("@", "missing"))
     with pytest.raises(UnresolvedRef, match=r"\$missing is not a corified object"):
         refs.resolve_ref(Ref("$", "missing"))
+
+
+def test_registry_resolution_is_case_insensitive_and_preserves_spelling():
+    refs = Refs(player=Obj(1), registry={"Door": Obj(10)})
+
+    assert refs.registry_key("door") == "Door"
+    assert refs.resolve_ref(Ref("@", "DOOR")) == Obj(10)
+    assert refs.symbolize_obj(Obj(10)) == Ref("@", "Door")
 
 
 def test_symbolize_prefers_player_then_registry_then_shortest_system_name():

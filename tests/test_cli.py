@@ -121,6 +121,25 @@ def test_pull_rejects_unknown_keys_before_export_or_state_write(monkeypatch):
         cli.cmd_pull(SimpleNamespace(keys=["hall", "missing"]))
 
 
+def test_plan_exports_the_case_matching_registry_binding(monkeypatch):
+    refs = Refs(player=Obj(1), registry={"Hall": Obj(10)})
+    file_obj = ObjectDef(key="hall", name="Hall", parent=Obj(2))
+    live_obj = ObjectDef(key="Hall", name="Hall", parent=Obj(2))
+    world = SimpleNamespace(refs=lambda: refs, load_files=lambda: {"hall": file_obj})
+
+    def fake_export(actual_world, actual_refs, keys):
+        assert (actual_world, actual_refs, keys) == (world, refs, ["Hall"])
+        return {"Hall": live_obj}
+
+    monkeypatch.setattr(cli.export_mod, "export", fake_export)
+
+    _, _, pending = cli._plan(world)
+
+    assert pending.creates == []
+    assert pending.destroys == {}
+    assert pending.unchanged == ["hall"]
+
+
 def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch):
     world = SimpleNamespace(
         refs=lambda: registry_value([["hall", "Hall"], [Obj(10), Obj(11)]]),

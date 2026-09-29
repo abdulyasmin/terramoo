@@ -15,7 +15,7 @@ from uuid import uuid4
 from . import moolit
 from .errors import MooError
 from .moolit import Obj, Ref
-from .plan import Plan, describe, diff_object
+from .plan import Plan, VerbTarget, describe, diff_object
 from .refs import Refs
 from .world import World
 
@@ -29,9 +29,9 @@ class Outcome:
 def _resolve_op(op: tuple, refs: Refs) -> list:
     """Resolve an op and retain its registry identity for helper-side CAS."""
     def binding(ref: Ref) -> list:
-        key = ref.name
+        key = refs.registry_key(ref.name) or ref.name
         obj = refs.resolve_ref(ref)
-        nonce = refs.generations.get(key)
+        nonce = refs.generation_for(key)
         if not nonce:
             raise MooError(
                 f"@{key} has an unverified legacy binding; confirm it with "
@@ -40,11 +40,14 @@ def _resolve_op(op: tuple, refs: Refs) -> list:
         return [key, obj, nonce]
 
     if op[0] == "link":
-        return ["link", [binding(r) for r in op[1] if r.name in refs.registry]]
+        return ["link", [binding(r) for r in op[1] if refs.registry_key(r.name) is not None]]
     if not isinstance(op[1], Ref) or op[1].kind != "@":
         raise MooError(f"{op[0]} has no managed-object key")
     key, obj, nonce = binding(op[1])
-    return [op[0], key, obj, nonce, *(refs.resolve(v) for v in op[2:])]
+    return [
+        op[0], key, obj, nonce,
+        *(refs.resolve(v.index if isinstance(v, VerbTarget) else v) for v in op[2:]),
+    ]
 
 
 def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> list[object | None]:
@@ -96,6 +99,70 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
     return received
 
 
+def _depends_on_unlink(unlink: tuple, following: tuple) -> bool:
+    if unlink[0] != "unlink" or following[0] not in ("setprop", "rmprop", "clearprop"):
+        return False
+    if unlink[1] != following[1]:
+        return False
+    expected = "source" if unlink[2] == "exit" else "dest" if unlink[2] == "entrance" else None
+    return expected is not None and str(following[2]).lower() == expected
+
+
+def _apply_ops(world: World, plan_ops: list[tuple], refs: Refs, outcome: Outcome, log) -> None:
+    """Resolve and batch normal ops, but gate endpoint changes on unlink.
+
+    A failed unlink followed by a successful `setprop source`/`dest` would
+    strand the exit in its old room, and the ignored membership properties
+    could not reveal that drift on the next plan.
+    """
+    batch: list[list] = []
+    labels: list[str] = []
+
+    def flush() -> None:
+        if batch:
+            _send(world, batch, labels, outcome, log)
+            batch.clear()
+            labels.clear()
+
+    i = 0
+    while i < len(plan_ops):
+        op = plan_ops[i]
+        label = describe(op)
+        if op[0] != "unlink":
+            try:
+                batch.append(_resolve_op(op, refs))
+                labels.append(label)
+            except (KeyError, MooError) as e:
+                outcome.failed.append((label, str(e)))
+                log(f"  SKIP {label}: {e}")
+            i += 1
+            continue
+
+        flush()
+        succeeded = False
+        try:
+            result = _send(world, [_resolve_op(op, refs)], [label], outcome, log)
+            succeeded = bool(
+                result
+                and isinstance(result[0], list)
+                and len(result[0]) >= 2
+                and result[0][0] == 1
+            )
+        except (KeyError, MooError) as e:
+            outcome.failed.append((label, str(e)))
+            log(f"  SKIP {label}: {e}")
+
+        if i + 1 < len(plan_ops) and _depends_on_unlink(op, plan_ops[i + 1]):
+            if not succeeded:
+                dependent = describe(plan_ops[i + 1])
+                why = f"prerequisite {label} failed"
+                outcome.failed.append((dependent, why))
+                log(f"  SKIP {dependent}: {why}")
+                i += 1
+        i += 1
+    flush()
+
+
 def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs) -> list[tuple]:
     """Ops for the objects just created, diffed against what they actually
     are now: a core's `initialize` sets properties of its own (LambdaCore's
@@ -103,10 +170,14 @@ def _replan_created(world: World, plan_ops: list[tuple], created: list[str], fil
     from .export import export
 
     live = export(world, refs, created)
+    files_by_name = {key.lower(): value for key, value in files.items()}
+    created_folded = {key.lower() for key in created}
     kept = [op for op in plan_ops
-            if op[0] == "link" or not (isinstance(op[1], Ref) and op[1].kind == "@" and op[1].name in created)]
+            if op[0] == "link" or not (
+                isinstance(op[1], Ref) and op[1].kind == "@" and op[1].name.lower() in created_folded
+            )]
     fresh = [op for key in created if live.get(key) is not None
-             for op in diff_object(key, files[key], live[key], refs)]
+             for op in diff_object(key, files_by_name[key.lower()], live[key], refs)]
     links = [op for op in kept if op[0] == "link"]
     return [op for op in kept if op[0] != "link"] + fresh + links
 
@@ -125,8 +196,8 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
             [
                 "create",
                 key,
-                refs.registry.get(key, Obj(-1)),
-                refs.generations.get(key) or "",
+                refs.registry[refs.registry_key(key)] if refs.registry_key(key) is not None else Obj(-1),
+                refs.generation_for(key) or "",
                 refs.resolve(parent),
                 name,
                 create_nonces[key],
@@ -139,12 +210,14 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         created = []
         for (key, _, _), label, result in zip(plan.creates, labels, results):
             returned = result[1] if isinstance(result, list) and len(result) >= 2 and result[0] == 1 else None
+            actual_key = refs.registry_key(key)
             if (
                 isinstance(returned, Obj)
-                and refs.registry.get(key) == returned
-                and refs.generations.get(key) == create_nonces[key]
+                and actual_key is not None
+                and refs.registry[actual_key] == returned
+                and refs.generation_for(actual_key) == create_nonces[key]
             ):
-                created.append(key)
+                created.append(actual_key)
                 continue
             if returned is not None:
                 why = f"create returned {returned}, but the verified registry binding is different"
@@ -156,8 +229,10 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
                 log(f"  FAIL {label}: {why}")
         failed_created = {key for key, _, _ in plan.creates} - set(created)
         for key in failed_created:
-            refs.registry.pop(key, None)
-            refs.generations.pop(key, None)
+            actual_key = refs.registry_key(key)
+            if actual_key is not None:
+                refs.registry.pop(actual_key, None)
+                refs.generations.pop(actual_key, None)
         refs.pending = failed_created
         refs.reindex()
         if created:
@@ -167,15 +242,7 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         refs.pending = set()
     if plan_ops:
         log("applying:")
-        ops, labels = [], []
-        for op in plan_ops:
-            try:
-                ops.append(_resolve_op(op, refs))
-                labels.append(describe(op))
-            except (KeyError, MooError) as e:
-                outcome.failed.append((describe(op), str(e)))
-                log(f"  SKIP {describe(op)}: {e}")
-        _send(world, ops, labels, outcome, log)
+        _apply_ops(world, plan_ops, refs, outcome, log)
     refs.pending = set()
     if destroy and plan.destroys and outcome.failed:
         log("skipping recycling: earlier create or apply operations failed; run a clean apply to retry")
@@ -185,7 +252,7 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         # Callbacks may have rebound orphan keys since the plan was built.
         for key, o in plan.destroys.items():
             label = f"recycle {key} ({o})"
-            nonce = refs.generations.get(key)
+            nonce = refs.generation_for(key)
             if not nonce:
                 why = (
                     f"@{key} has an unverified legacy binding; confirm it with "

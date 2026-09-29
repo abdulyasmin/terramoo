@@ -27,6 +27,32 @@ def test_identical_objects_need_nothing():
     assert plan.diff_object("hall", want, have, r) == []
 
 
+def test_case_only_object_and_property_spelling_is_one_moo_identity():
+    r = refs(Hall=200)
+    want = room(key="hall", props=[PropDef("foo", 1)])
+    have = room(key="Hall", props=[PropDef("Foo", 1)])
+
+    pending = plan.build({"hall": want}, {"Hall": have}, r)
+
+    assert pending.creates == []
+    assert pending.destroys == {}
+    assert pending.ops == [
+        ("propinfo", Ref("@", "Hall"), "Foo", [ME, "rc", "foo"]),
+        ("link", [Ref("@", "Hall")]),
+    ]
+
+
+def test_case_colliding_properties_are_rejected_as_a_plan_problem():
+    r = refs(hall=200)
+    want = room(props=[PropDef("Foo", 1), PropDef("foo", 2)])
+
+    pending = plan.build({"hall": want}, {"hall": room()}, r)
+
+    assert len(pending.problems) == 1
+    assert "properties 'Foo' and 'foo' differ only in case" in pending.problems[0]
+    assert pending.ops == []
+
+
 def test_live_side_may_be_symbolized():
     """Export writes `$room` and `@name` where it can; both sides resolve."""
     r = refs(hall=200, gate=201)
@@ -73,6 +99,79 @@ def test_every_kind_of_change():
     assert ops[3] == ("propinfo", Ref("@", "hall"), "guard", [ME, "r"])
     assert ops[4] == ("addprop", Ref("@", "hall"), "banner", "purple", [ME, "rc"])
     assert ops[9] == ("addverb", Ref("@", "hall"), [ME, "rd", "bow"], ["any", "none", "none"], ["pass();"])
+
+
+def test_duplicate_verbs_are_matched_in_order_and_mutated_by_live_index():
+    r = refs(hall=200)
+    want = room(verbs=[
+        VerbDef("do", ["return 1;"], args=("this", "none", "this")),
+        VerbDef("do", ["return 3;"], args=("any", "none", "this")),
+    ])
+    have = room(verbs=[
+        VerbDef("do", ["return 1;"], args=("this", "none", "this"), live_index=1),
+        VerbDef("do", ["return 2;"], args=("any", "none", "this"), live_index=2),
+        VerbDef("spare do", [], live_index=3),
+        VerbDef("other", [], live_index=4),
+    ])
+
+    ops = plan.diff_object("hall", want, have, r)
+
+    assert ops == [
+        ("verbcode", Ref("@", "hall"), plan.VerbTarget(2, "do#2"), ["return 3;"]),
+        ("rmverb", Ref("@", "hall"), plan.VerbTarget(4, "other")),
+        ("rmverb", Ref("@", "hall"), plan.VerbTarget(3, "spare")),
+    ]
+    assert plan.describe(ops[0]) == "verbcode @hall.do#2"
+
+
+def test_unchanged_duplicate_and_overlapping_alias_verbs_need_nothing():
+    r = refs(hall=200)
+    want = room(verbs=[
+        VerbDef("do", ["return 1;"]),
+        VerbDef("do", ["return 2;"], args=("any", "none", "this")),
+        VerbDef("look do", ["return 3;"]),
+    ])
+    have = room(verbs=[
+        VerbDef("do", ["return 1;"], live_index=1),
+        VerbDef("do", ["return 2;"], args=("any", "none", "this"), live_index=2),
+        VerbDef("look do", ["return 3;"], live_index=3),
+    ])
+
+    assert plan.diff_object("hall", want, have, r) == []
+
+
+def test_unique_verb_change_describes_the_name_not_numeric_descriptor():
+    r = refs(hall=200)
+    want = room(verbs=[VerbDef("bow", ["return 2;"])])
+    have = room(verbs=[VerbDef("bow", ["return 1;"], live_index=1)])
+
+    ops = plan.diff_object("hall", want, have, r)
+
+    assert ops == [
+        ("verbcode", Ref("@", "hall"), plan.VerbTarget(1, "bow"), ["return 2;"]),
+    ]
+    assert plan.describe(ops[0]) == "verbcode @hall.bow"
+
+
+def test_verb_code_only_change_emits_no_endpoint_reconciliation_ops():
+    r = refs(hall=200, source=201, dest=202)
+    endpoints = [
+        PropDef("source", Ref("@", "source"), defined=False),
+        PropDef("dest", Ref("@", "dest"), defined=False),
+    ]
+    want = room(props=endpoints, verbs=[VerbDef("bow", ["return 2;"])])
+    have = room(
+        props=[
+            PropDef("source", Ref("@", "source"), defined=False),
+            PropDef("dest", Ref("@", "dest"), defined=False),
+        ],
+        verbs=[VerbDef("bow", ["return 1;"], live_index=1)],
+    )
+
+    ops = plan.diff_object("hall", want, have, r)
+
+    assert [op[0] for op in ops] == ["verbcode"]
+    assert plan.describe(ops[0]) == "verbcode @hall.bow"
 
 
 def test_new_object_sets_everything_and_is_created_parents_first():
@@ -122,6 +221,42 @@ def test_map_values_compare_after_resolution():
     want = room(props=[PropDef("links", Map({"north": Ref("@", "gate")}), defined=False)])
     have = room(props=[PropDef("links", Map({"north": Obj(201)}), defined=False)])
     assert plan.diff_object("hall", want, have, r) == []
+
+
+def test_exit_endpoint_changes_unlink_old_rooms_before_setting_properties():
+    r = refs(hall=200, old_source=201, new_source=202, old_dest=203, new_dest=204)
+    want = room(props=[
+        PropDef("source", Ref("@", "new_source"), defined=False),
+        PropDef("dest", Ref("@", "new_dest"), defined=False),
+    ])
+    have = room(props=[
+        PropDef("source", Ref("@", "old_source"), defined=False),
+        PropDef("dest", Ref("@", "old_dest"), defined=False),
+    ])
+
+    assert plan.diff_object("hall", want, have, r) == [
+        ("unlink", Ref("@", "hall"), "exit", Obj(201)),
+        ("setprop", Ref("@", "hall"), "source", Obj(202)),
+        ("unlink", Ref("@", "hall"), "entrance", Obj(203)),
+        ("setprop", Ref("@", "hall"), "dest", Obj(204)),
+    ]
+
+
+def test_non_object_source_and_dest_values_are_plain_properties():
+    r = refs(hall=200)
+    want = room(props=[
+        PropDef("source", "a new book", defined=False),
+        PropDef("dest", ["b"], defined=False),
+    ])
+    have = room(props=[
+        PropDef("source", "an old book", defined=False),
+        PropDef("dest", ["a"], defined=False),
+    ])
+
+    assert plan.diff_object("hall", want, have, r) == [
+        ("setprop", Ref("@", "hall"), "source", "a new book"),
+        ("setprop", Ref("@", "hall"), "dest", ["b"]),
+    ]
 
 
 def test_reference_to_a_key_with_no_file_is_a_problem():

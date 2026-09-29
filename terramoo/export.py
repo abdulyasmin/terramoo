@@ -33,12 +33,13 @@ def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | N
     names but the MOO no longer has come back as `None`."""
     if hasattr(world, "require_helper_version"):
         world.require_helper_version()
-    by_obj = {refs.registry[k]: k for k in keys}
+    canonical = [refs.registry_key(key) or key for key in keys]
+    by_obj = {refs.registry[k]: k for k in canonical}
     objs = list(by_obj)
     out: dict[str, ObjectDef | None] = {}
     for i in range(0, len(objs), CHUNK):
         batch = objs[i:i + CHUNK]
-        bindings = [[by_obj[obj], obj, refs.generations.get(by_obj[obj]) or ""] for obj in batch]
+        bindings = [[by_obj[obj], obj, refs.generation_for(by_obj[obj]) or ""] for obj in batch]
         records = world.eval(world.helper("tmoo_export", moolit.serialize(bindings)))
         if not isinstance(records, list):
             raise MooError("tmoo_export returned a malformed result")
@@ -126,10 +127,10 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
                 defined=bool(defined),
             )
         )
-    for verb in verbs:
+    for exported_index, verb in enumerate(verbs, 1):
         if not (
             isinstance(verb, list)
-            and len(verb) == 5
+            and len(verb) in (5, 6)
             and isinstance(verb[0], str)
             and isinstance(verb[1], Obj)
             and isinstance(verb[2], str)
@@ -143,11 +144,20 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
             and isinstance(verb[4], list)
             and all(isinstance(line, str) for line in verb[4])
             and all(_one_line(line) for line in verb[4])
+            and (len(verb) == 5 or type(verb[5]) is int and verb[5] >= 1)
         ):
             name = verb[0] if isinstance(verb, list) and verb and isinstance(verb[0], str) else "?"
             raise MooError(f"tmoo_export returned {key} verb {name!r} with malformed fields")
-        names, vowner, perms, args, code = verb
-        obj.verbs.append(VerbDef(names=names, code=list(code), args=tuple(args), perms=perms, owner=_owner(vowner, refs)))
+        names, vowner, perms, args, code = verb[:5]
+        live_index = verb[5] if len(verb) == 6 else exported_index
+        obj.verbs.append(VerbDef(
+            names=names,
+            code=list(code),
+            args=tuple(args),
+            perms=perms,
+            owner=_owner(vowner, refs),
+            live_index=live_index,
+        ))
     return obj
 
 

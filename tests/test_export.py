@@ -110,6 +110,19 @@ def test_export_decodes_refs_owners_flags_properties_and_verbs():
     ]
 
 
+def test_export_retains_the_live_numeric_verb_descriptor():
+    obj = Obj(10)
+    record = [
+        obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [],
+        [["do", Obj(1), "rd", ["this", "none", "this"], ["return 1;"], 7]],
+    ]
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    exported = export_mod.export(ExportWorld({obj: record}), refs, ["hall"])["hall"]
+
+    assert exported.verbs[0].live_index == 7
+
+
 def test_export_rejects_a_malformed_nested_property_literal():
     obj = Obj(10)
     record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rc", "{1,"]], []]
