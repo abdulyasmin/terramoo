@@ -9,7 +9,6 @@ import fcntl
 import getpass
 import json
 import os
-import shlex
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -411,15 +410,242 @@ def _assert_file_snapshot(path: Path, data: bytes, identity: tuple[int, int, int
         raise _LocalEditError(f"{path.name} changed after it was read")
 
 
+def _assert_object_snapshots(
+    w: World,
+    snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]],
+    object_files: frozenset[Path],
+) -> None:
+    for path, (data, identity) in snapshots.items():
+        _assert_file_snapshot(path, data, identity)
+    current = frozenset(w.objects_dir.glob("*.moo"))
+    if current != object_files:
+        added = sorted(path.name for path in current - object_files)
+        removed = sorted(path.name for path in object_files - current)
+        detail = []
+        if added:
+            detail.append(f"appeared: {', '.join(added)}")
+        if removed:
+            detail.append(f"disappeared: {', '.join(removed)}")
+        raise _LocalEditError(
+            f"objects directory changed after it was read ({'; '.join(detail)})"
+        )
+
+
+def _recovery_temp_paths(w: World, record: dict) -> list[Path]:
+    raw_paths = record.get("preserved_temporary_files")
+    if not isinstance(raw_paths, list):
+        raise MooError("rename recovery journal has no temporary-file list")
+    allowed_parents = {w.objects_dir.resolve(), w.state_path.parent.resolve()}
+    paths = []
+    for raw in raw_paths:
+        if not isinstance(raw, str):
+            raise MooError("rename recovery journal has an invalid temporary-file path")
+        path = Path(raw)
+        if (
+            path.parent.resolve() not in allowed_parents
+            or not path.name.startswith(".")
+            or not path.name.endswith(".tmp")
+        ):
+            raise MooError(f"rename recovery journal has an unsafe temporary-file path: {raw}")
+        paths.append(path)
+    return paths
+
+
+def _finish_rename_recovery(w: World, journal: Path, record: dict) -> None:
+    try:
+        for path in _recovery_temp_paths(w, record):
+            path.unlink(missing_ok=True)
+        journal.unlink()
+        _fsync_dir(journal.parent)
+    except OSError as e:
+        raise MooError(
+            f"rename recovery succeeded but cleanup failed ({e}); journal preserved at {journal}"
+        ) from None
+
+
+def _read_rename_journal(w: World, journal: Path) -> tuple[dict, str, str, Obj, str]:
+    try:
+        record = json.loads(journal.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise MooError(f"cannot read rename recovery journal {journal}: {e}") from None
+    if not isinstance(record, dict):
+        raise MooError("rename recovery journal is not an object")
+    old = record.get("old_key")
+    new = record.get("new_key")
+    generation = record.get("generation")
+    index = record.get("registry_index")
+    revision = record.get("registry_revision")
+    if not isinstance(old, str) or not old:
+        raise MooError("rename recovery journal has an invalid old key")
+    try:
+        new = validate_key(new)
+        obj = parse_object_arg(record.get("object"))
+    except (AttributeError, MooError, TypeError):
+        raise MooError("rename recovery journal has an invalid new key or object") from None
+    if (
+        not isinstance(generation, str)
+        or type(index) is not int
+        or index < 1
+        or type(revision) is not int
+        or revision < 0
+    ):
+        raise MooError("rename recovery journal has invalid registry identity fields")
+    _recovery_temp_paths(w, record)
+    return record, old, new, obj, generation
+
+
+def _recover_local_migration(
+    w: World,
+    journal: Path,
+    record: dict,
+    source_name: str,
+    destination_name: str,
+    registry: Registry,
+) -> None:
+    snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]] = {}
+    try:
+        files = w.load_files(snapshots)
+    except (OSError, ValueError) as e:
+        raise MooError(f"cannot prepare rename recovery: {e}") from None
+    object_files = frozenset(snapshots)
+    source_key = next(
+        (key for key in files if key.lower() == source_name.lower()), None
+    )
+    destination_key = next(
+        (key for key in files if key.lower() == destination_name.lower()), None
+    )
+    changes = []
+    remove_source = None
+    for key, local in files.items():
+        source = w.file_for(key)
+        refs_changed = _rewrite_object_refs(local, source_name, destination_name)
+        destination = source
+        if key == source_key:
+            local.key = destination_name
+            destination = w.file_for(destination_name)
+        if not refs_changed and key != source_key:
+            continue
+        rendered = objdef.render(local)
+        same_path = source == destination
+        if key == source_key and destination_key is not None and destination_key != source_key:
+            existing = snapshots[w.file_for(destination_key)][0]
+            if existing != rendered.encode():
+                raise MooError(
+                    f"cannot recover rename: both {source.name} and {destination.name} exist"
+                )
+            remove_source = source
+            continue
+        changes.append((source, destination, same_path, rendered))
+
+    temporary = []
+    prepared = []
+    state_temp = _temp_for(w.state_path, "recover")
+    try:
+        for source, destination, same_path, rendered in changes:
+            new_temp = _temp_for(destination, "recover")
+            _write_fsynced(new_temp, rendered)
+            temporary.append(new_temp)
+            prepared.append((source, destination, same_path, new_temp))
+        write_state(state_temp, w.player, registry, w.toolbox)
+        with state_temp.open("rb") as stream:
+            os.fsync(stream.fileno())
+        temporary.append(state_temp)
+        record.update(
+            phase="recovery-local-prepared",
+            preserved_temporary_files=[
+                str(path)
+                for path in dict.fromkeys([*_recovery_temp_paths(w, record), *temporary])
+                if path.exists()
+            ],
+            recovery_commands=["tmoo rename-key --recover"],
+        )
+        _write_rename_journal(journal, record)
+        _assert_object_snapshots(w, snapshots, object_files)
+        for source, destination, same_path, new_temp in prepared:
+            if not same_path and destination.exists():
+                raise _LocalEditError(
+                    f"{destination.name} appeared during rename recovery"
+                )
+            new_temp.replace(destination)
+            if not same_path:
+                source.unlink()
+            _fsync_dir(destination.parent)
+        if remove_source is not None:
+            remove_source.unlink()
+            _fsync_dir(remove_source.parent)
+        state_temp.replace(w.state_path)
+        _fsync_dir(w.state_path.parent)
+    except (OSError, MooError) as e:
+        record.update(
+            phase="recovery-local-incomplete",
+            recovery_error=str(e),
+            preserved_temporary_files=[
+                str(path)
+                for path in dict.fromkeys([*_recovery_temp_paths(w, record), *temporary])
+                if path.exists()
+            ],
+            recovery_commands=["tmoo rename-key --recover"],
+        )
+        _write_rename_journal(journal, record)
+        raise MooError(
+            f"rename recovery could not finish local files ({e}); recovery journal preserved at {journal}"
+        ) from None
+
+
+def _recover_rename_key_locked(w: World, journal: Path) -> None:
+    if not journal.exists():
+        raise MooError(f"no unfinished rename recovery journal exists at {journal}")
+    record, old, new, obj, nonce = _read_rename_journal(w, journal)
+    w.require_helper_version()
+    updated = w.read_registry()
+    recorded_revision = record["registry_revision"]
+    if updated.revision < recorded_revision:
+        raise MooError(
+            f"remote registry revision {updated.revision} predates recovery journal revision "
+            f"{recorded_revision}; journal preserved at {journal}"
+        )
+    actual = _matching_registry_key(updated, new, obj, nonce)
+    still_old = _matching_registry_key(updated, old, obj, nonce)
+    if (
+        actual is not None
+        and still_old is None
+        and updated.revision > recorded_revision
+    ):
+        _recover_local_migration(w, journal, record, old, new, updated)
+        outcome = f"finished rename {old} to {actual} ({obj})"
+    elif still_old is not None and actual is None:
+        _recover_local_migration(w, journal, record, new, old, updated)
+        outcome = f"restored rename {new} to {still_old} ({obj})"
+    else:
+        record.update(
+            phase="remote-outcome-conflicted",
+            registry_keys=list(updated),
+            recovery_commands=["tmoo rename-key --recover"],
+        )
+        _write_rename_journal(journal, record)
+        raise MooError(
+            f"rename recovery does not match either {old!r} or {new!r} remotely; journal preserved at {journal}"
+        )
+    _finish_rename_recovery(w, journal, record)
+    print(outcome)
+
+
 def cmd_rename_key(args):
     """Lock, prepare local migration, CAS-rename, then finalize files."""
     w = _world(args)
     with _rename_lock(w):
-        _rename_key_locked(w, args)
+        journal = w.state_path.with_name("state.json.rename-recovery.json")
+        if getattr(args, "recover", False):
+            if getattr(args, "old", None) is not None or getattr(args, "new", None) is not None:
+                raise MooError("rename-key --recover does not take OLD or NEW")
+            _recover_rename_key_locked(w, journal)
+        else:
+            if getattr(args, "old", None) is None or getattr(args, "new", None) is None:
+                raise MooError("rename-key needs OLD and NEW (or use --recover)")
+            _rename_key_locked(w, args, journal)
 
 
-def _rename_key_locked(w: World, args) -> None:
-    journal = w.state_path.with_name("state.json.rename-recovery.json")
+def _rename_key_locked(w: World, args, journal: Path) -> None:
     if journal.exists():
         raise MooError(
             f"unfinished rename recovery journal exists at {journal}; inspect it before retrying"
@@ -440,6 +666,7 @@ def _rename_key_locked(w: World, args) -> None:
     snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]] = {}
     try:
         files = w.load_files(snapshots)
+        object_files = frozenset(snapshots)
         source_key = next((key for key in files if key.lower() == old.lower()), None)
         collision = next(
             (key for key in files if key.lower() == new.lower() and key != source_key),
@@ -510,13 +737,7 @@ def _rename_key_locked(w: World, args) -> None:
         _cleanup(temporary + [state_temp] + ([state_backup] if state_backup else []))
         raise MooError(f"cannot prepare rename {old!r} to {new!r}: {e}") from None
 
-    if objdef.is_identifier(old):
-        recovery_commands = [
-            f"tmoo rename-key {shlex.quote(new)} {shlex.quote(old)}",
-            f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}",
-        ]
-    else:
-        recovery_commands = [f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}"]
+    recovery_commands = ["tmoo rename-key --recover"]
     record = {
         "phase": "intent",
         "old_key": old,
@@ -568,8 +789,7 @@ def _rename_key_locked(w: World, args) -> None:
     finalization_error = None
     finalized = []
     try:
-        for source, _, _, _, _, original, identity in prepared:
-            _assert_file_snapshot(source, original, identity)
+        _assert_object_snapshots(w, snapshots, object_files)
         for source, destination, same_path, new_temp, _, original, identity in prepared:
             _assert_file_snapshot(source, original, identity)
             if not same_path and destination.exists():
@@ -639,20 +859,13 @@ def _rename_key_locked(w: World, args) -> None:
             f"local rename failed ({finalization_error}); the remote rename was reversed"
         ) from None
 
-    if reverse_error is None:
-        commands = [f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}"]
-    elif objdef.is_identifier(old):
-        commands = [
-            f"tmoo rename-key {shlex.quote(new)} {shlex.quote(old)}",
-            f"tmoo rename-key {shlex.quote(old)} {shlex.quote(new)}",
-        ]
-    else:
-        commands = [f"tmoo rename-key {shlex.quote(new)} {shlex.quote(new)}"]
+    commands = ["tmoo rename-key --recover"]
     record.update({
         "phase": "recovery-incomplete",
         "local_error": str(finalization_error),
         "reverse_error": str(reverse_error) if reverse_error is not None else None,
         "rollback_errors": rollback_errors,
+        "finalized_files": [str(destination) for _, destination, _ in finalized],
         "preserved_temporary_files": [str(path) for path in temporary if path.exists()],
         "recovery_commands": commands,
     })
@@ -811,8 +1024,9 @@ def main(argv=None):
     a.set_defaults(fn=cmd_adopt)
 
     rk = sub.add_parser("rename-key", help="rename a registry key and its local object file")
-    rk.add_argument("old", help="existing registry key, including a legacy key")
-    rk.add_argument("new", help="new ASCII identifier")
+    rk.add_argument("old", nargs="?", help="existing registry key, including a legacy key")
+    rk.add_argument("new", nargs="?", help="new ASCII identifier")
+    rk.add_argument("--recover", action="store_true", help="finish the recorded interrupted rename")
     rk.set_defaults(fn=cmd_rename_key)
 
     pl = sub.add_parser("plan", help="show what apply would do")

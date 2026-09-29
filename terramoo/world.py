@@ -28,7 +28,7 @@ SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 6
+HELPER_VERSION = 7
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 
 # Properties that are the MOO's runtime state rather than the object's

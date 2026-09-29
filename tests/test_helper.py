@@ -12,7 +12,11 @@ import subprocess
 
 import pytest
 
+from terramoo import plan
 from terramoo.moolit import parse, serialize
+from terramoo.model import ObjectDef, PropDef
+from terramoo.moolit import Obj, Ref
+from terramoo.refs import Refs
 from terramoo.world import registry_value
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +247,31 @@ return {result, tool.registry[1][1], tool.registry[4]};
     assert result[1:] == ["other", 1]
 
 
+def test_rename_revision_survives_a_legacy_registry_from_recycle(offline_moo, tmp_path):
+    recycle = serialize([
+        'this.toolbox.registry = {{"other", "doomed"}, {this.target, this}, {"object-generation", "doomed-generation"}};',
+        "return 1;",
+    ])
+    body = """
+o = create(#-1);
+doomed = create(#-1);
+add_property(o, "_terramoo_generation", "object-generation", {#2, "r"});
+add_property(doomed, "_terramoo_generation", "doomed-generation", {#2, "r"});
+add_property(doomed, "toolbox", tool, {#2, ""});
+add_property(doomed, "target", o, {#2, ""});
+add_verb(doomed, {#2, "xd", "recycle"}, {"this", "none", "this"});
+set_verb_code(doomed, "recycle", RECYCLE_CODE);
+tool.registry = {{"old", "doomed"}, {o, doomed}, {"object-generation", "doomed-generation"}, 1};
+result = tool:tmoo_apply({{"rename", 1, 1, o, "object-generation", "other"}, {"destroy", "doomed", doomed, "doomed-generation"}, {"rename", 1, 1, o, "object-generation", "stale"}});
+return {result, tool.registry[1][1], tool.registry[4]};
+""".replace("RECYCLE_CODE", recycle)
+    result = _run_helper_script(offline_moo, tmp_path, body)
+    assert result[0][0][0] == 1
+    assert result[0][1][0] == 1
+    assert result[0][2][:2] == [0, "E_INVARG"]
+    assert result[1:] == ["other", 3]
+
+
 def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):
     result = _run_helper_script(offline_moo, tmp_path, """
 old = create(#-1);
@@ -294,3 +323,47 @@ result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source"
 return {result, door.source, door in old.exits};
 """)
     assert result == [[[1, 1]], "nowhere", 0]
+
+
+@pytest.mark.parametrize(
+    "prop, relation, membership",
+    [("source", "exit", "exits"), ("dest", "entrance", "entrances")],
+)
+def test_exit_to_non_exit_removing_endpoint_unlinks_old_room(
+    offline_moo, tmp_path, prop, relation, membership
+):
+    refs = Refs(
+        player=Obj(130),
+        registry={"door": Obj(200), "room": Obj(201)},
+        sysrefs={"exit": Obj(7), "thing": Obj(5)},
+    )
+    have = ObjectDef(
+        key="door",
+        name="Door",
+        parent=Ref("$", "exit"),
+        props=[PropDef(prop, Ref("@", "room"), defined=False)],
+    )
+    want = ObjectDef(key="door", name="Door", parent=Ref("$", "thing"))
+    planned = plan.diff_object("door", want, have, refs)
+    expressions = {
+        "chparent": '{"chparent", "door", door, "door-generation", ordinary}',
+        "unlink": f'{{"unlink", "door", door, "door-generation", "{relation}", room}}',
+        "clearprop": f'{{"clearprop", "door", door, "door-generation", "{prop}"}}',
+    }
+    helper_ops = ", ".join(expressions[op[0]] for op in planned)
+    result = _run_helper_script(offline_moo, tmp_path, f"""
+room = create(#-1);
+ordinary = create(#-1);
+door = create($exit);
+add_property(room, "{membership}", {{door}}, {{#2, "rw"}});
+add_verb(room, {{#2, "xd", "remove_{relation}"}}, {{"this", "none", "this"}});
+set_verb_code(room, "remove_{relation}", {{"this.{membership} = setremove(this.{membership}, args[1]);", "return 1;"}});
+door.{prop} = room;
+add_property(door, "_terramoo_generation", "door-generation", {{#2, "r"}});
+tool.registry = {{{{"door"}}, {{door}}, {{"door-generation"}}}};
+result = tool:tmoo_apply({{{helper_ops}}});
+return {{result, parent(door) == ordinary, door in room.{membership}}};
+""")
+    assert [op[0] for op in planned] == ["unlink", "clearprop", "chparent"]
+    assert all(item[0] == 1 for item in result[0])
+    assert result[1:] == [1, 0]

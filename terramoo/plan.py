@@ -272,13 +272,14 @@ def diff_object(
         ).items()
     }
 
-    def unlink_old(prop: PropDef):
+    def unlink_old(prop: PropDef, destination: list[tuple] | None = None):
+        destination = ops if destination is None else destination
         relation = {"source": "exit", "dest": "entrance"}.get(prop.name.lower())
         old = refs.resolve(prop.value, live=True) if relation is not None else None
         # Only an exit's room links need undoing; a `source` holding a string
         # or list on some other object is just a property.
         if isinstance(old, (Obj, Ref)):
-            ops.append(("unlink", target, relation, old))
+            destination.append(("unlink", target, relation, old))
 
     def reconcile_endpoint(prop: PropDef, prop_name: str, value) -> bool:
         if prop.name.lower() in ("source", "dest"):
@@ -326,9 +327,25 @@ def diff_object(
             ):
                 if cur is None or not reconcile_endpoint(cur, p.name, value):
                     ops.append(("setprop", target, p.name, value))
+    before_chparent = []
     for cur in have_props.values():
-        unlink_old(cur)
-        ops.append(("rmprop", target, cur.name) if cur.defined else ("clearprop", target, cur.name))
+        removal = []
+        unlink_old(cur, removal)
+        removal.append(
+            ("rmprop", target, cur.name)
+            if cur.defined
+            else ("clearprop", target, cur.name)
+        )
+        if was_exit and not will_exit and cur.name.lower() in ("source", "dest"):
+            before_chparent.extend(removal)
+        else:
+            ops.extend(removal)
+    if before_chparent:
+        chparent = next((i for i, op in enumerate(ops) if op[0] == "chparent"), None)
+        if chparent is None:
+            ops.extend(before_chparent)
+        else:
+            ops[chparent:chparent] = before_chparent
 
     have_verbs = list(have.verbs if have else [])
     primary_counts: dict[str, int] = {}

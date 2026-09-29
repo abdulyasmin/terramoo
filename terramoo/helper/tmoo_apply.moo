@@ -9,6 +9,7 @@ endif
 ops = args[1];
 may_suspend = length(args) > 1 && args[2];
 out = {};
+revision = 0;
 for op in (ops)
   try
     "Earlier ops or suspended tasks may have changed the registry.";
@@ -18,9 +19,13 @@ for op in (ops)
       for ignored in (reg[1])
         nonces = {@nonces, ""};
       endfor
-      reg = {reg[1], reg[2], nonces, 0};
+      reg = {reg[1], reg[2], nonces, revision};
     elseif (length(reg) == 3)
-      reg = {reg[1], reg[2], reg[3], 0};
+      reg = {reg[1], reg[2], reg[3], revision};
+    elseif (reg[4] > revision)
+      revision = reg[4];
+    else
+      reg[4] = revision;
     endif
     kind = op[1];
     r = 1;
@@ -61,9 +66,13 @@ for op in (ops)
         for ignored in (reg[1])
           nonces = {@nonces, ""};
         endfor
-        reg = {reg[1], reg[2], nonces, 0};
+        reg = {reg[1], reg[2], nonces, revision};
       elseif (length(reg) == 3)
-        reg = {reg[1], reg[2], reg[3], 0};
+        reg = {reg[1], reg[2], reg[3], revision};
+      elseif (reg[4] > revision)
+        revision = reg[4];
+      else
+        reg[4] = revision;
       endif
       j = r in reg[2];
       if (j && reg[1][j] != key)
@@ -158,9 +167,13 @@ for op in (ops)
           for ignored in (reg[1])
             nonces = {@nonces, ""};
           endfor
-          reg = {reg[1], reg[2], nonces, 0};
+          reg = {reg[1], reg[2], nonces, revision};
         elseif (length(reg) == 3)
-          reg = {reg[1], reg[2], reg[3], 0};
+          reg = {reg[1], reg[2], reg[3], revision};
+        elseif (reg[4] > revision)
+          revision = reg[4];
+        else
+          reg[4] = revision;
         endif
         i = key in reg[1];
       endif

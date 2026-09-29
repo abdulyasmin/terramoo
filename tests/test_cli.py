@@ -313,7 +313,88 @@ def test_rename_key_journals_a_failed_remote_reverse(tmp_path, monkeypatch):
     assert len(sent) == 2
     assert raw_registry[0] == ["new_key"]
     assert journal.exists()
-    assert "tmoo rename-key new_key old_key" in journal.read_text()
+    assert "tmoo rename-key --recover" in journal.read_text()
+
+
+def test_rename_key_recovers_a_failed_remote_reverse(tmp_path, monkeypatch):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, fail_reverse=True)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    original_replace = type(world.state_path).replace
+    fail_finalization = True
+
+    def maybe_fail_state_replace(path, target):
+        if fail_finalization and target == world.state_path:
+            raise OSError("disk full")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(type(world.state_path), "replace", maybe_fail_state_replace)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="recovery journal"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key", recover=False))
+
+    fail_finalization = False
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert raw_registry[0] == ["new_key"]
+    assert not world.file_for("old_key").exists()
+    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
+    assert not world.state_path.with_name("state.json.rename-recovery.json").exists()
+    assert list(world.dir.rglob("*.tmp")) == []
+
+
+def test_rename_key_recovers_when_unknown_outcome_is_already_new(tmp_path, monkeypatch):
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    real_read_registry = world.read_registry
+    fail_reconciliation = True
+
+    def maybe_read_registry():
+        if fail_reconciliation:
+            raise MooError("connection lost")
+        return real_read_registry()
+
+    monkeypatch.setattr(world, "read_registry", maybe_read_registry)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="outcome is unknown"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key", recover=False))
+
+    assert raw_registry[0] == ["new_key"]
+    fail_reconciliation = False
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert not world.file_for("old_key").exists()
+    assert objdef.parse(world.file_for("new_key").read_text()).key == "new_key"
+    assert not world.state_path.with_name("state.json.rename-recovery.json").exists()
+    assert list(world.dir.rglob("*.tmp")) == []
+
+
+def test_rename_key_recovery_confirms_remote_reversal_and_preserves_edit(
+    tmp_path, monkeypatch
+):
+    edited = ObjectDef(key="old_key", name="Edited concurrently", parent=Obj(2))
+
+    def edit_source(world, _raw_registry, call_number):
+        if call_number == 1:
+            world.file_for("old_key").write_text(objdef.render(edited))
+
+    world, raw_registry, _ = _rename_world(
+        tmp_path, monkeypatch, after_rename=edit_source
+    )
+    world.write_file(ObjectDef(key="old_key", name="Original", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="local files were not overwritten"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key", recover=False))
+
+    assert raw_registry[0] == ["old_key"]
+    cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert raw_registry[0] == ["old_key"]
+    assert objdef.parse(world.file_for("old_key").read_text()).name == "Edited concurrently"
+    assert not world.state_path.with_name("state.json.rename-recovery.json").exists()
+    assert list(world.dir.rglob("*.tmp")) == []
 
 
 def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(tmp_path, monkeypatch):
@@ -397,6 +478,35 @@ def test_rename_key_preserves_an_edit_made_after_parsing(tmp_path, monkeypatch):
 
     assert raw_registry[0] == ["old_key"]
     assert objdef.parse(world.file_for("old_key").read_text()).name == "Edited concurrently"
+    assert world.state_path.with_name("state.json.rename-recovery.json").exists()
+
+
+def test_rename_key_detects_an_edit_to_an_initially_unaffected_file(tmp_path, monkeypatch):
+    edited = ObjectDef(
+        key="hall",
+        name="Edited concurrently",
+        parent=Obj(2),
+        props=[PropDef("late_reference", Ref("@", "old_key"))],
+    )
+
+    def edit_unrelated(world, _raw_registry, call_number):
+        if call_number == 1:
+            world.file_for("hall").write_text(objdef.render(edited))
+
+    world, raw_registry, _ = _rename_world(
+        tmp_path, monkeypatch, after_rename=edit_unrelated
+    )
+    world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
+    world.write_file(ObjectDef(key="hall", name="Hall", parent=Obj(2)))
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="hall.moo changed after it was read.*recovery journal"):
+        cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key", recover=False))
+
+    assert raw_registry[0] == ["old_key"]
+    assert objdef.parse(world.file_for("hall").read_text()).props[0].value == Ref(
+        "@", "old_key"
+    )
     assert world.state_path.with_name("state.json.rename-recovery.json").exists()
 
 
