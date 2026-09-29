@@ -128,6 +128,13 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
             o = refs.registry[key]
             ops.append(["recycle", o])
             labels.append(f"recycle {key} ({o})")
+        done_before = len(outcome.done)
+        _send(world, ops, labels, outcome, log)
+        recycled = set(outcome.done[done_before:])
+        ops, labels = [], []
+        for key in plan.destroys:
+            if f"recycle {key} ({refs.registry[key]})" not in recycled:
+                continue
             ops.append(["unregister", key])
             labels.append(f"unregister {key}")
         _send(world, ops, labels, outcome, log)

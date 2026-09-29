@@ -117,6 +117,40 @@ def test_orphans_are_only_recycled_when_destroy_is_explicit():
     assert destroyed.saved == {}
 
 
+def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
+    blocked = Obj(201)
+    removable = Obj(202)
+
+    class PartlyFailedRecycleWorld(FakeWorld):
+        def _op(self, op):
+            if op == ["recycle", blocked]:
+                self.sent.append(op)
+                return [0, "E_PERM", "recycle refused"]
+            return super()._op(op)
+
+    w = PartlyFailedRecycleWorld()
+    w.registry = {"blocked": blocked, "removable": removable}
+    refs = Refs(player=ME, registry=dict(w.registry))
+
+    outcome = apply.run(
+        w,
+        plan.Plan(destroys=["blocked", "removable"]),
+        refs,
+        files={},
+        destroy=True,
+        log=lambda _: None,
+    )
+
+    assert w.sent == [
+        ["recycle", blocked],
+        ["recycle", removable],
+        ["unregister", "removable"],
+    ]
+    assert outcome.failed == [("recycle blocked (#201)", "E_PERM: recycle refused")]
+    assert refs.registry == {"blocked": blocked}
+    assert w.saved == {"blocked": blocked}
+
+
 def test_ops_are_split_before_the_configured_batch_limit():
     hall = Obj(200)
     w = FakeWorld()
