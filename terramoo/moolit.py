@@ -68,7 +68,7 @@ class LiteralError(ValueError):
 _TOKEN = re.compile(
     r"""
     (?P<ws>\s+)
-  | (?P<float>-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d+[eE][+-]?\d+)
+  | (?P<float>-?(?:(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+))
   | (?P<int>-?\d+)
   | (?P<str>"(?:[^"\\]|\\.)*")
   | (?P<obj>\#[0-9A-Fa-f]{6}-[0-9A-Fa-f]{10}|\#-?\d+)
