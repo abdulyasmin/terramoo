@@ -87,7 +87,11 @@ def find_root() -> Path:
 def registry_value(raw) -> dict[str, Obj]:
     """The registry as `tmoo_apply` keeps it: {keys, objects}."""
     if isinstance(raw, list) and len(raw) == 2 and all(isinstance(x, list) for x in raw):
-        return dict(zip(raw[0], raw[1]))
+        keys, objects = raw
+        valid_keys = all(isinstance(k, str) for k in keys)
+        valid_objects = all(isinstance(o, Obj) for o in objects)
+        if len(keys) == len(objects) and valid_keys and valid_objects:
+            return dict(zip(keys, objects))
     return {}
 
 

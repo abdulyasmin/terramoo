@@ -40,13 +40,25 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
         if not batch:
             return
         results = world.eval(world.helper("tmoo_apply", moolit.serialize(batch)))
+        if not isinstance(results, list):
+            why = f"malformed helper result list: {results!r}"
+            for label in batch_labels:
+                outcome.failed.append((label, why))
+                log(f"  FAIL {label}: {why}")
+            batch.clear()
+            batch_labels.clear()
+            return
         for label, res in zip(batch_labels, results):
-            if res[0] == 1:
+            if isinstance(res, list) and len(res) >= 2 and res[0] == 1:
                 outcome.done.append(label)
                 log(f"  ok   {label}")
-            else:
+            elif isinstance(res, list) and len(res) >= 3 and res[0] == 0:
                 outcome.failed.append((label, f"{res[1]}: {res[2]}"))
                 log(f"  FAIL {label}: {res[1]}: {res[2]}")
+            else:
+                why = f"malformed helper result: {res!r}"
+                outcome.failed.append((label, why))
+                log(f"  FAIL {label}: {why}")
         if len(results) != len(batch):
             outcome.failed.append(("batch", f"{len(batch)} ops sent, {len(results)} results"))
         batch.clear()

@@ -3,6 +3,7 @@
 import re
 import socket
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,7 +42,10 @@ class FakeMoo:
                 m = TAG.search(text)
                 out = self.reply(m.group(1) if m else None, text)
                 if out:
-                    conn.sendall("".join(x + "\r\n" for x in out).encode())
+                    try:
+                        conn.sendall("".join(x + "\r\n" for x in out).encode())
+                    except OSError:
+                        return
 
 
 def is_sentinel(tag, line):
@@ -131,3 +135,43 @@ def test_wire_strips_and_refuses_telnet_negotiation():
     wire._feed(b"ld " + bytes([IAC, IAC]) + b"\r\n")
     assert list(wire.lines) == ["hello", "world �"]
     assert b.recv(16) == bytes([IAC, 254, 70])  # DONT 70
+
+
+def test_declared_answer_length_must_match_the_received_chunks():
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        if "_r = (player)" in line:
+            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
+        return [tag + "S", tag + "B2", tag + "D1", tag + "E"]
+
+    t = client(FakeMoo(reply))
+    with pytest.raises(MooError, match="declared 2 characters but received 1"):
+        t.eval("anything")
+
+
+@pytest.mark.parametrize("expression", ["1\n2", "1\r2"])
+def test_multiline_expressions_are_rejected_before_they_reach_the_wire(expression):
+    t = Telnet("local", 0, "alice", "pw")
+    t._wire = SimpleNamespace(send_line=lambda line: pytest.fail("sent malformed expression"))
+
+    with pytest.raises(MooError, match="newline"):
+        t._request(expression, 1)
+
+
+@pytest.mark.parametrize("declared", [3, 4])
+def test_declared_length_may_count_characters_or_utf8_bytes(declared):
+    # mooR counts '"é"' as 3 characters; LambdaMOO and ToastStunt as 4 bytes.
+    def reply(tag, line):
+        if tag is None:
+            return []
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        if "_r = (player)" in line:
+            return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
+        return [tag + "S", tag + f"B{declared}", tag + 'D"é"', tag + "E"]
+
+    t = client(FakeMoo(reply))
+    assert t.eval("anything") == "é"

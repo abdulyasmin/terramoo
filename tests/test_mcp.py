@@ -114,6 +114,38 @@ def test_rpc_rejects_invalid_json_as_a_transport_error(monkeypatch):
         McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
 
 
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("[]", "expected an object"),
+        ('{"jsonrpc": "2.0", "id": 1}', "missing result"),
+        ('{"error": "permission denied"}', "permission denied"),
+    ],
+)
+def test_rpc_rejects_malformed_json_rpc_envelopes(monkeypatch, body, expected):
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response(body))
+
+    with pytest.raises(MooError, match=expected):
+        McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ["not", "an", "object"],
+        {"content": "not a list"},
+        {"content": [None]},
+        {"content": [{"type": "text", "text": 7}]},
+    ],
+)
+def test_call_tool_rejects_a_malformed_tool_result(result):
+    t = McpTransport("https://moo.example/mcp", "token")
+    t.rpc = lambda method, params: result
+
+    with pytest.raises(MooError, match="malformed result from eval"):
+        t.call_tool("eval", {})
+
+
 def test_tool_errors_and_set_prop_payloads_are_preserved():
     t = McpTransport("https://moo.example/mcp", "token")
     t.rpc = lambda method, params: {"isError": True, "content": [{"type": "text", "text": "denied"}]}

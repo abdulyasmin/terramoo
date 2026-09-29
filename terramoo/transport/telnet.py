@@ -248,6 +248,7 @@ class Telnet(Transport):
         wire.send_line(f"{self.eval_prefix}{self._tell(moolit.escape(tag + 'Z'))}")
         started = sentinel = False
         chunks: list[str] = []
+        expected_length: int | None = None
         untagged: list[str] = []
         outcome = None
         deadline = time.monotonic() + timeout
@@ -271,10 +272,27 @@ class Telnet(Transport):
                 started = True
             elif kind == "B":
                 chunks = []
+                try:
+                    expected_length = int(rest)
+                except ValueError:
+                    expected_length = None
             elif kind == "D":
                 chunks.append(rest)
-            elif kind in "EX":
-                outcome = (kind, "".join(chunks) if kind == "E" else rest)
+            elif kind == "E":
+                text = "".join(chunks)
+                if expected_length is None:
+                    outcome = ("P", "the MOO sent an answer without a valid length")
+                # LambdaMOO counts bytes, mooR characters; either one is whole.
+                elif expected_length not in (len(text), len(text.encode("utf-8"))):
+                    outcome = ("P", f"the MOO declared {expected_length} characters but received {len(text)}")
+                else:
+                    outcome = (kind, text)
+                if sentinel:
+                    break
+                # Read on to this request's sentinel so it cannot confuse the next.
+                deadline = time.monotonic() + min(timeout, 10)
+            elif kind == "X":
+                outcome = (kind, rest)
                 if sentinel:
                     break
                 # Read on to this request's sentinel so it cannot confuse the next.
@@ -286,6 +304,8 @@ class Telnet(Transport):
                 if not started:
                     raise MooError("the expression did not compile" + self._context(untagged))
         kind, text = outcome
+        if kind == "P":
+            raise MooError(text)
         if kind == "X":
             try:
                 code, msg = moolit.parse(text)

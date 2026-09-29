@@ -71,13 +71,30 @@ class McpTransport(Transport):
                 msg = json.loads(raw)
         except json.JSONDecodeError as e:
             raise MooError(f"invalid JSON-RPC response from {self.url}: {e.msg}") from None
+        if not isinstance(msg, dict):
+            raise MooError(f"invalid JSON-RPC response from {self.url}: expected an object")
         if "error" in msg:
-            raise MooError(f"{method}: {msg['error'].get('message', msg['error'])}")
+            error = msg["error"]
+            detail = error.get("message", error) if isinstance(error, dict) else error
+            raise MooError(f"{method}: {detail}")
+        if "result" not in msg:
+            raise MooError(f"invalid JSON-RPC response from {self.url}: missing result")
         return msg["result"]
 
     def call_tool(self, name: str, arguments: dict) -> str:
         result = self.rpc("tools/call", {"name": name, "arguments": arguments})
-        text = "".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
+        if not isinstance(result, dict):
+            raise MooError(f"malformed result from {name}: expected an object")
+        content = result.get("content", [])
+        if not isinstance(content, list) or not all(isinstance(c, dict) for c in content):
+            raise MooError(f"malformed result from {name}: content is not a list of objects")
+        bad_text = any(
+            c.get("type") == "text" and not isinstance(c.get("text", ""), str)
+            for c in content
+        )
+        if bad_text:
+            raise MooError(f"malformed result from {name}: text content is not a string")
+        text = "".join(c.get("text", "") for c in content if c.get("type") == "text")
         if result.get("isError"):
             raise MooError(text.strip() or f"{name} failed")
         return text

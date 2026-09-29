@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from terramoo import apply, moolit, plan
 from terramoo.errors import MooError
 from terramoo.model import ObjectDef, PropDef
@@ -148,4 +150,35 @@ def test_a_short_result_list_is_reported_and_state_is_still_saved():
     outcome = apply.run(w, p, refs, files={}, log=lambda _: None)
     assert outcome.done == ["name @hall A"]
     assert outcome.failed == [("batch", "2 ops sent, 1 results")]
+    assert w.saved == {"hall": hall}
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ([[0, "E_PERM"]], "malformed helper result: [0, 'E_PERM']"),
+        ([[1]], "malformed helper result: [1]"),
+        (7, "malformed helper result list: 7"),
+    ],
+)
+def test_a_malformed_helper_result_is_failed_and_state_is_still_saved(reply, expected):
+    class MalformedReplyWorld(FakeWorld):
+        def eval(self, call):
+            verb, text = call
+            if verb == "tmoo_apply":
+                value = moolit.parse(text)
+                self.batches.append(value)
+                self.sent.extend(value)
+                return reply
+            return super().eval(call)
+
+    hall = Obj(200)
+    w = MalformedReplyWorld()
+    w.registry = {"hall": hall}
+    refs = Refs(player=ME, registry={"hall": hall})
+    p = plan.Plan(ops=[("name", Ref("@", "hall"), "A")])
+
+    outcome = apply.run(w, p, refs, files={}, log=lambda _: None)
+
+    assert outcome.failed == [("name @hall A", expected)]
     assert w.saved == {"hall": hall}

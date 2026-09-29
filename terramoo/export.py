@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import moolit
+from .errors import MooError
 from .model import ObjectDef, PropDef, VerbDef, normalize
 from .moolit import Obj
 from .refs import Refs
@@ -19,9 +20,28 @@ def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | N
     out: dict[str, ObjectDef | None] = {}
     for i in range(0, len(objs), CHUNK):
         batch = objs[i:i + CHUNK]
-        for rec in world.eval(world.helper("tmoo_export", moolit.serialize(batch))):
-            key = by_obj[rec[0]]
+        records = world.eval(world.helper("tmoo_export", moolit.serialize(batch)))
+        if not isinstance(records, list):
+            raise MooError("tmoo_export returned a malformed result")
+        seen = set()
+        for rec in records:
+            if (
+                not isinstance(rec, list)
+                or len(rec) not in (1, 8)
+                or not isinstance(rec[0], Obj)
+            ):
+                raise MooError("tmoo_export returned a malformed record")
+            obj = rec[0]
+            if obj not in batch:
+                raise MooError(f"tmoo_export returned an unexpected object {obj}")
+            if obj in seen:
+                raise MooError(f"tmoo_export returned {obj} more than once")
+            seen.add(obj)
+            key = by_obj[obj]
             out[key] = None if len(rec) == 1 else _to_def(key, rec, refs, world.ignore_props)
+        missing = [obj for obj in batch if obj not in seen]
+        if missing:
+            raise MooError(f"tmoo_export returned no record for {missing[0]}")
     return out
 
 

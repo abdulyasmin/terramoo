@@ -3,8 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from terramoo.errors import MooError
+from terramoo.model import ObjectDef
 from terramoo.moolit import Obj
-from terramoo.world import DEFAULT_IGNORE_PROPS, HELPER_VERBS, TOOLBOX_NAME, World
+from terramoo.world import DEFAULT_IGNORE_PROPS, HELPER_VERBS, TOOLBOX_NAME, World, registry_value
 
 
 def make_world(tmp_path, config):
@@ -64,6 +65,47 @@ def test_load_files_rejects_case_collisions(tmp_path, monkeypatch):
     monkeypatch.setattr(World, "objects_dir", property(lambda self: objects_dir))
     with pytest.raises(MooError, match="differ only in case"):
         w.load_files()
+
+
+def test_load_files_wraps_malformed_object_input_with_its_path(tmp_path):
+    w = make_world(tmp_path, 'player = "alice"\n')
+    (w.objects_dir / "broken.moo").write_text('object broken\n  name: "Broken"\nendobject\n')
+
+    error = r"worlds/test/objects/broken\.moo: object broken: name and parent are required"
+    with pytest.raises(MooError, match=error):
+        w.load_files()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        [],
+        [["hall"]],
+        [["hall", "door"], [Obj(10)]],
+        [["hall"], [10]],
+        [[1], [Obj(10)]],
+    ],
+)
+def test_registry_value_rejects_malformed_registry_shapes(raw):
+    assert registry_value(raw) == {}
+
+
+def test_registry_value_accepts_parallel_key_and_object_lists():
+    assert registry_value([["hall", "door"], [Obj(10), Obj(11)]]) == {
+        "hall": Obj(10),
+        "door": Obj(11),
+    }
+
+
+def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):
+    w = World("test", tmp_path, "alice", {})
+    obj = ObjectDef(key="hall", name="Hall", parent=Obj(2))
+
+    path = w.write_file(obj)
+
+    assert path == tmp_path / "worlds" / "test" / "objects" / "hall.moo"
+    assert w.load_files() == {"hall": obj}
 
 
 class BootstrapTransport:
