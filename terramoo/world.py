@@ -23,12 +23,19 @@ from .secrets import secret_for
 from .transport import Transport, connect
 
 HELPER_DIR = Path(__file__).parent / "helper"
-HELPER_VERBS = ("tmoo_export", "tmoo_apply", "tmoo_sysrefs", "tmoo_info")
+HELPER_VERBS = (
+    "tmoo_registry",
+    "tmoo_callback",
+    "tmoo_export",
+    "tmoo_apply",
+    "tmoo_sysrefs",
+    "tmoo_info",
+)
 SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 8
+HELPER_VERSION = 9
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 REGISTRY_STATE_PROP = "_terramoo_registry_state"
 REGISTRY_REVISION_PROP = "_terramoo_registry_revision"
@@ -217,9 +224,18 @@ class World:
     def load_files(
         self,
         snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]] | None = None,
+        *,
+        allowed_case_pair: tuple[str, str] | None = None,
     ) -> dict[str, ObjectDef]:
         out = {}
-        folded: dict[str, str] = {}
+        folded: dict[str, list[str]] = {}
+        allowed_folded_pair = None
+        if (
+            allowed_case_pair is not None
+            and allowed_case_pair[0] != allowed_case_pair[1]
+            and allowed_case_pair[0].lower() == allowed_case_pair[1].lower()
+        ):
+            allowed_folded_pair = frozenset(allowed_case_pair)
         for path in sorted(self.objects_dir.glob("*.moo")):
             try:
                 validate_key(path.stem)
@@ -249,9 +265,15 @@ class World:
             if obj.key != path.stem:
                 raise MooError(f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}")
             # MOO string comparison ignores case, and so does the registry.
-            if obj.key.lower() in folded:
-                raise MooError(f"keys {folded[obj.key.lower()]!r} and {obj.key!r} differ only in case")
-            folded[obj.key.lower()] = obj.key
+            same_fold = [*folded.get(obj.key.lower(), []), obj.key]
+            if len(same_fold) > 1 and not (
+                len(same_fold) == 2
+                and frozenset(same_fold) == allowed_folded_pair
+            ):
+                raise MooError(
+                    f"keys {same_fold[0]!r} and {obj.key!r} differ only in case"
+                )
+            folded[obj.key.lower()] = same_fold
             out[obj.key] = obj
         return out
 
@@ -352,46 +374,13 @@ class World:
         props = self.eval(f"properties({tb})")
         if "registry" not in props:
             self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})')
-        raw_registry = self.eval(f"{tb}.registry")
-        registry_revision = registry_value(raw_registry).revision
-        protected_revision = registry_revision
-        if REGISTRY_REVISION_PROP in props:
-            protected_revision = max(
-                protected_revision, self.eval(f"{tb}.{REGISTRY_REVISION_PROP}")
-            )
-        if REGISTRY_STATE_PROP in props:
-            saved_registry = self.eval(f"{tb}.{REGISTRY_STATE_PROP}")
-            protected_revision = max(
-                protected_revision, registry_value(saved_registry).revision
-            )
-        revision = (
-            protected_revision + 1
-            if registry_revision < protected_revision
-            else registry_revision
-        )
-        if REGISTRY_REVISION_PROP in props:
-            self.transport.set_prop(tb, REGISTRY_REVISION_PROP, revision)
-        else:
-            self.eval(
-                f'add_property({tb}, "{REGISTRY_REVISION_PROP}", {revision}, {{player, "r"}})'
-            )
-        if len(raw_registry) < 4:
-            nonces = raw_registry[2] if len(raw_registry) == 3 else ["" for _ in raw_registry[0]]
-            raw_registry = [raw_registry[0], raw_registry[1], nonces, revision]
-        else:
-            raw_registry[3] = revision
-        if REGISTRY_STATE_PROP in props:
-            self.transport.set_prop(tb, REGISTRY_STATE_PROP, raw_registry)
-        else:
-            self.eval(
-                f'add_property({tb}, "{REGISTRY_STATE_PROP}", '
-                f'{self.transport.serialize(raw_registry)}, {{player, "r"}})'
-            )
-        self.transport.set_prop(tb, "registry", raw_registry)
         for name in HELPER_VERBS:
             code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
             r = self.transport.install_verb(tb, name, code)
             log(f"{tb}:{name} {r}")
+        # One non-suspending MOO task rereads and migrates all registry state.
+        # No MOO task can interleave between that read and the three writes.
+        self.eval(f'{tb}:tmoo_registry("bootstrap")')
         if HELPER_VERSION_PROP in props:
             self.transport.set_prop(tb, HELPER_VERSION_PROP, HELPER_VERSION)
         else:

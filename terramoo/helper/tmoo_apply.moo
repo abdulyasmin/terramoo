@@ -78,39 +78,8 @@ for op in (ops)
       before = reg;
       r = create(p);
       "create() may run an :initialize verb that changes the registry.";
-      reg = this.registry;
-      reg_length = length(reg);
-      registry_revision = reg_length > 3 ? reg[4] | 0;
-      if (protected_registry)
-        protected_revision = this._terramoo_registry_revision;
-        current = this._terramoo_registry_state;
-      endif
-      if (reg_length == 2)
-        nonces = {};
-        for ignored in (reg[1])
-          nonces = {@nonces, ""};
-        endfor
-        reg = {reg[1], reg[2], nonces, registry_revision};
-      elseif (reg_length == 3)
-        reg = {reg[1], reg[2], reg[3], registry_revision};
-      endif
-      if (protected_registry)
-        revision = registry_revision > protected_revision ? registry_revision | protected_revision;
-        if (current[4] > before[4] && equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]))
-          reg = current;
-        elseif (registry_revision < protected_revision)
-          revision = protected_revision + 1;
-        endif
-        reg[4] = revision;
-        this._terramoo_registry_revision = revision;
-        this._terramoo_registry_state = reg;
-        this.registry = reg;
-      else
-        if (registry_revision > revision)
-          revision = registry_revision;
-        endif
-        reg[4] = revision;
-      endif
+      reg = this:tmoo_registry("reconcile", before);
+      revision = reg[4];
       j = r in reg[2];
       if (j && reg[1][j] != key)
         raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j], "; cannot bind key ", key));
@@ -220,39 +189,8 @@ for op in (ops)
           raise(E_INVARG, tostr("object ", o, " is still valid after recycle"));
         endif
         ":recycle may register objects, remove keys or replace this binding.";
-        reg = this.registry;
-        reg_length = length(reg);
-        registry_revision = reg_length > 3 ? reg[4] | 0;
-        if (protected_registry)
-          protected_revision = this._terramoo_registry_revision;
-          current = this._terramoo_registry_state;
-        endif
-        if (reg_length == 2)
-          nonces = {};
-          for ignored in (reg[1])
-            nonces = {@nonces, ""};
-          endfor
-          reg = {reg[1], reg[2], nonces, registry_revision};
-        elseif (reg_length == 3)
-          reg = {reg[1], reg[2], reg[3], registry_revision};
-        endif
-        if (protected_registry)
-          revision = registry_revision > protected_revision ? registry_revision | protected_revision;
-          if (current[4] > before[4] && equal(reg[1], before[1]) && equal(reg[2], before[2]) && equal(reg[3], before[3]))
-            reg = current;
-          elseif (registry_revision < protected_revision)
-            revision = protected_revision + 1;
-          endif
-          reg[4] = revision;
-          this._terramoo_registry_revision = revision;
-          this._terramoo_registry_state = reg;
-          this.registry = reg;
-        else
-          if (registry_revision > revision)
-            revision = registry_revision;
-          endif
-          reg[4] = revision;
-        endif
+        reg = this:tmoo_registry("reconcile", before);
+        revision = reg[4];
         i = key in reg[1];
       endif
       if (i)
@@ -292,7 +230,7 @@ for op in (ops)
           src = `o.source ! ANY => #-1';
           dst = `o.dest ! ANY => #-1';
           if (valid(src) && !(o in `src.exits ! ANY => {}'))
-            src:add_exit(o);
+            this:tmoo_callback(src, "add_exit", o);
             if (!(o in `src.exits ! ANY => {}'))
               raise(E_INVARG, tostr("exit ", o, " was not added to ", src, ".exits"));
             endif
@@ -304,7 +242,7 @@ for op in (ops)
             raise(E_INVARG, tostr("key ", key, " changed during link"));
           endif
           if (valid(dst) && !(o in `dst.entrances ! ANY => {}'))
-            dst:add_entrance(o);
+            this:tmoo_callback(dst, "add_entrance", o);
             if (!(o in `dst.entrances ! ANY => {}'))
               raise(E_INVARG, tostr("exit ", o, " was not added to ", dst, ".entrances"));
             endif
@@ -382,14 +320,14 @@ for op in (ops)
             if (will_exit && valid(new_room) && (!was_exit || new_room != old_room))
               if (prop == "source" && !(o in `new_room.exits ! ANY => {}'))
                 adding_new = 1;
-                callback_result = new_room:add_exit(o);
+                callback_result = this:tmoo_callback(new_room, "add_exit", o);
                 added_new = o in `new_room.exits ! ANY => {}';
                 if (!callback_result || !added_new)
                   raise(E_INVARG, tostr("exit ", o, " was not added to ", new_room, ".exits"));
                 endif
               elseif (prop == "dest" && !(o in `new_room.entrances ! ANY => {}'))
                 adding_new = 1;
-                callback_result = new_room:add_entrance(o);
+                callback_result = this:tmoo_callback(new_room, "add_entrance", o);
                 added_new = o in `new_room.entrances ! ANY => {}';
                 if (!callback_result || !added_new)
                   raise(E_INVARG, tostr("exit ", o, " was not added to ", new_room, ".entrances"));
@@ -408,14 +346,14 @@ for op in (ops)
             if (was_exit && valid(old_room) && (!will_exit || old_room != new_room))
               if (prop == "source" && o in `old_room.exits ! ANY => {}')
                 removing_old = 1;
-                callback_result = old_room:remove_exit(o);
+                callback_result = this:tmoo_callback(old_room, "remove_exit", o);
                 removed_old = !(o in `old_room.exits ! ANY => {}');
                 if (!callback_result || !removed_old)
                   raise(E_INVARG, tostr("exit ", o, " remains in ", old_room, ".exits"));
                 endif
               elseif (prop == "dest" && o in `old_room.entrances ! ANY => {}')
                 removing_old = 1;
-                callback_result = old_room:remove_entrance(o);
+                callback_result = this:tmoo_callback(old_room, "remove_entrance", o);
                 removed_old = !(o in `old_room.entrances ! ANY => {}');
                 if (!callback_result || !removed_old)
                   raise(E_INVARG, tostr("exit ", o, " remains in ", old_room, ".entrances"));
@@ -458,7 +396,7 @@ for op in (ops)
             restored_old = !removed_old;
             if (restored_prop && removed_old)
               if (prop == "source")
-                callback_result = `old_room:add_exit(o) ! ANY => 0';
+                callback_result = `this:tmoo_callback(old_room, "add_exit", o) ! ANY => 0';
                 if (!callback_result || !(o in `old_room.exits ! ANY => {}'))
                   rollback = tostr(rollback, " could not restore old exits membership;");
                   restored_old = 0;
@@ -466,7 +404,7 @@ for op in (ops)
                   restored_old = 1;
                 endif
               else
-                callback_result = `old_room:add_entrance(o) ! ANY => 0';
+                callback_result = `this:tmoo_callback(old_room, "add_entrance", o) ! ANY => 0';
                 if (!callback_result || !(o in `old_room.entrances ! ANY => {}'))
                   rollback = tostr(rollback, " could not restore old entrances membership;");
                   restored_old = 0;
@@ -485,10 +423,10 @@ for op in (ops)
               endtry
               if (rolled_forward && will_exit && valid(new_room))
                 if (prop == "source" && !(o in `new_room.exits ! ANY => {}'))
-                  callback_result = `new_room:add_exit(o) ! ANY => 0';
+                  callback_result = `this:tmoo_callback(new_room, "add_exit", o) ! ANY => 0';
                   added_new = o in `new_room.exits ! ANY => {}';
                 elseif (prop == "dest" && !(o in `new_room.entrances ! ANY => {}'))
-                  callback_result = `new_room:add_entrance(o) ! ANY => 0';
+                  callback_result = `this:tmoo_callback(new_room, "add_entrance", o) ! ANY => 0';
                   added_new = o in `new_room.entrances ! ANY => {}';
                 endif
                 if (!added_new)
@@ -498,12 +436,12 @@ for op in (ops)
             endif
             if (restored_prop && restored_old && added_new)
               if (prop == "source")
-                callback_result = `new_room:remove_exit(o) ! ANY => 0';
+                callback_result = `this:tmoo_callback(new_room, "remove_exit", o) ! ANY => 0';
                 if (!callback_result || o in `new_room.exits ! ANY => {}')
                   rollback = tostr(rollback, " could not remove new exits membership;");
                 endif
               else
-                callback_result = `new_room:remove_entrance(o) ! ANY => 0';
+                callback_result = `this:tmoo_callback(new_room, "remove_entrance", o) ! ANY => 0';
                 if (!callback_result || o in `new_room.entrances ! ANY => {}')
                   rollback = tostr(rollback, " could not remove new entrances membership;");
                 endif
@@ -531,12 +469,12 @@ for op in (ops)
           a = parent(a);
         endwhile
         if (is_exit && valid(room) && relation == "exit" && o in `room.exits ! ANY => {}')
-          room:remove_exit(o);
+          this:tmoo_callback(room, "remove_exit", o);
           if (o in `room.exits ! ANY => {}')
             raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".exits"));
           endif
         elseif (is_exit && valid(room) && relation == "entrance" && o in `room.entrances ! ANY => {}')
-          room:remove_entrance(o);
+          this:tmoo_callback(room, "remove_entrance", o);
           if (o in `room.entrances ! ANY => {}')
             raise(E_INVARG, tostr("exit ", o, " remains in ", room, ".entrances"));
           endif

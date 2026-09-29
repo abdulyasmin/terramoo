@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -222,16 +223,64 @@ def test_write_file_refuses_a_resolved_path_outside_objects_directory(tmp_path, 
 class BootstrapTransport:
     can_suspend = True
 
-    def __init__(self, registry=None, revision=None, saved_registry=None):
+    def __init__(
+        self,
+        registry=None,
+        revision=None,
+        saved_registry=None,
+        *,
+        inject_after_registry_read=False,
+    ):
         self.expressions = []
         self.installed = []
         self.sets = []
         self.registry = registry or [[], [], [], 0]
         self.revision = revision
         self.saved_registry = saved_registry
+        self.inject_after_registry_read = inject_after_registry_read
+        self.injected = False
 
     def eval(self, expression):
         self.expressions.append(expression)
+        if expression == '#9:tmoo_registry("bootstrap")':
+            if self.inject_after_registry_read and not self.injected:
+                self.injected = True
+                self.registry = [
+                    [*self.registry[0], "concurrent"],
+                    [*self.registry[1], Obj(12)],
+                    [*self.registry[2], "concurrent-generation"],
+                    self.registry[3] + 1,
+                ]
+                self.revision = self.registry[3]
+                self.saved_registry = deepcopy(self.registry)
+            registry_revision = self.registry[3] if len(self.registry) > 3 else 0
+            saved_revision = (
+                self.saved_registry[3]
+                if self.saved_registry is not None and len(self.saved_registry) > 3
+                else 0
+            )
+            protected_revision = max(
+                registry_revision, self.revision or 0, saved_revision
+            )
+            revision = (
+                protected_revision + 1
+                if registry_revision < protected_revision
+                else registry_revision
+            )
+            nonces = (
+                self.registry[2]
+                if len(self.registry) > 2
+                else ["" for _ in self.registry[0]]
+            )
+            self.registry = [
+                deepcopy(self.registry[0]),
+                deepcopy(self.registry[1]),
+                deepcopy(nonces),
+                revision,
+            ]
+            self.revision = revision
+            self.saved_registry = deepcopy(self.registry)
+            return deepcopy(self.registry)
         props = []
         if self.registry != [[], [], [], 0] or self.revision is not None:
             props.append("registry")
@@ -245,15 +294,36 @@ class BootstrapTransport:
             "#9.name": TOOLBOX_NAME,
             "properties(player)": [],
             "properties(#9)": props,
-            "#9.registry": self.registry,
+            "#9.registry": deepcopy(self.registry),
             f"#9.{REGISTRY_REVISION_PROP}": self.revision,
             f"#9.{REGISTRY_STATE_PROP}": self.saved_registry,
         }
-        return answers.get(expression, 0)
+        answer = answers.get(expression, 0)
+        if (
+            expression == "#9.registry"
+            and self.inject_after_registry_read
+            and not self.injected
+        ):
+            self.injected = True
+            self.registry = [
+                [*self.registry[0], "concurrent"],
+                [*self.registry[1], Obj(12)],
+                [*self.registry[2], "concurrent-generation"],
+                self.registry[3] + 1,
+            ]
+            self.revision = self.registry[3]
+            self.saved_registry = deepcopy(self.registry)
+        return answer
 
     def set_prop(self, obj, name, value):
         self.expressions.append(f"set {obj}.{name} = {value!r}")
         self.sets.append((obj, name, value))
+        if name == "registry":
+            self.registry = deepcopy(value)
+        elif name == REGISTRY_REVISION_PROP:
+            self.revision = value
+        elif name == REGISTRY_STATE_PROP:
+            self.saved_registry = deepcopy(value)
 
     def serialize(self, value):
         return serialize(value)
@@ -296,8 +366,9 @@ def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     assert 'add_property(player, "tmoo", #9, {player, "r"})' in transport.expressions
     assert 'add_property(#9, "registry", {{}, {}, {}, 0}, {player, "r"})' in transport.expressions
     assert any(HELPER_VERSION_PROP in expression for expression in transport.expressions)
-    assert any(REGISTRY_REVISION_PROP in expression for expression in transport.expressions)
-    assert any(REGISTRY_STATE_PROP in expression for expression in transport.expressions)
+    assert transport.revision == 0
+    assert transport.saved_registry == [[], [], [], 0]
+    assert '#9:tmoo_registry("bootstrap")' in transport.expressions
     assert [name for _, name, _ in transport.installed] == list(HELPER_VERBS)
     assert all(lines for _, _, lines in transport.installed)
 
@@ -323,15 +394,38 @@ def test_bootstrap_honors_external_registry_content_and_advances_revision(
 
     assert w.bootstrap(log=lambda _: None) == Obj(9)
 
-    written = {name: value for _, name, value in transport.sets}
-    assert written[REGISTRY_REVISION_PROP] == 6
-    assert written[REGISTRY_STATE_PROP] == [
+    assert transport.revision == 6
+    assert transport.saved_registry == [
         ["operator"],
         [Obj(10)],
         ["operator-generation"],
         6,
     ]
-    assert written["registry"] == written[REGISTRY_STATE_PROP]
+    assert transport.registry == transport.saved_registry
+    assert '#9:tmoo_registry("bootstrap")' in transport.expressions
+
+
+def test_bootstrap_registry_migration_cannot_overwrite_a_concurrent_registration(
+    tmp_path,
+):
+    registry = [["existing"], [Obj(10)], ["existing-generation"], 5]
+    transport = BootstrapTransport(
+        registry=registry,
+        revision=5,
+        saved_registry=deepcopy(registry),
+        inject_after_registry_read=True,
+    )
+    w = World("test", tmp_path, "alice", {}, _transport=transport, _player=Obj(1))
+
+    w.bootstrap(log=lambda _: None)
+
+    assert transport.injected
+    assert transport.registry == [
+        ["existing", "concurrent"],
+        [Obj(10), Obj(12)],
+        ["existing-generation", "concurrent-generation"],
+        6,
+    ]
 
 
 @pytest.mark.parametrize("can_suspend, suffix", [(True, ", 1)"), (False, ", 0)")])

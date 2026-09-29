@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -478,6 +479,63 @@ def test_rename_key_recovers_case_only_remote_reversed_outcome(tmp_path, monkeyp
 
     assert objdef.parse(world.file_for("old_key").read_text()).key == "old_key"
     assert not journal.exists()
+
+
+def test_rename_key_recovery_collapses_two_file_case_only_crash_state(
+    tmp_path, monkeypatch
+):
+    world = World("test", tmp_path, "alice", {})
+    world.dir.mkdir(parents=True)
+    world.objects_dir.mkdir()
+    world._player = Obj(1)
+    world._toolbox = Obj(99)
+    old_path = world.objects_dir / "old-slot" / "old_key.moo"
+    new_path = world.objects_dir / "new-slot" / "OLD_KEY.moo"
+    old_path.parent.mkdir()
+    new_path.parent.mkdir()
+    old = ObjectDef(key="old_key", name="Old", parent=Obj(2))
+    new = ObjectDef(key="OLD_KEY", name="Old", parent=Obj(2))
+    old_path.write_text(objdef.render(old))
+    new_path.write_text(objdef.render(new))
+    original_glob = Path.glob
+    original_file_for = world.file_for
+
+    def simulated_case_sensitive_glob(path, pattern):
+        if path == world.objects_dir and pattern == "*.moo":
+            return iter([old_path, new_path])
+        return original_glob(path, pattern)
+
+    def simulated_case_sensitive_file_for(key):
+        if key == "old_key":
+            return old_path
+        if key == "OLD_KEY":
+            return new_path
+        return original_file_for(key)
+
+    monkeypatch.setattr(Path, "glob", simulated_case_sensitive_glob)
+    monkeypatch.setattr(world, "file_for", simulated_case_sensitive_file_for)
+    journal = _write_rename_recovery_journal(world, new="OLD_KEY")
+    record = json.loads(journal.read_text())
+    registry = registry_value(
+        [["OLD_KEY"], [Obj(10)], ["generation-10"], 1]
+    )
+
+    cli._recover_local_migration(
+        world, journal, record, "old_key", "OLD_KEY", registry
+    )
+
+    assert not old_path.exists()
+    assert objdef.parse(new_path.read_text()) == new
+
+
+def test_rename_key_recover_help_warns_against_concurrent_edits(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["rename-key", "--help"])
+
+    assert stopped.value.code == 0
+    assert "do not edit object files while recovery runs" in " ".join(
+        capsys.readouterr().out.split()
+    )
 
 
 def test_rename_key_recovery_accepts_semantically_equal_authored_destination(

@@ -524,14 +524,16 @@ def _recover_local_migration(
 ) -> None:
     snapshots: dict[Path, tuple[bytes, tuple[int, int, int, int]]] = {}
     try:
-        files = w.load_files(snapshots)
+        files = w.load_files(
+            snapshots, allowed_case_pair=(source_name, destination_name)
+        )
     except (OSError, ValueError) as e:
         raise MooError(f"cannot prepare rename recovery: {e}") from None
     object_files = frozenset(snapshots)
-    source_key = next(
+    source_key = source_name if source_name in files else next(
         (key for key in files if key.lower() == source_name.lower()), None
     )
-    destination_key = next(
+    destination_key = destination_name if destination_name in files else next(
         (key for key in files if key.lower() == destination_name.lower()), None
     )
     changes = []
@@ -1060,7 +1062,14 @@ def main(argv=None):
     rk = sub.add_parser("rename-key", help="rename a registry key and its local object file")
     rk.add_argument("old", nargs="?", help="existing registry key, including a legacy key")
     rk.add_argument("new", nargs="?", help="new ASCII identifier")
-    rk.add_argument("--recover", action="store_true", help="finish the recorded interrupted rename")
+    rk.add_argument(
+        "--recover",
+        action="store_true",
+        help=(
+            "finish the recorded interrupted rename; do not edit object files "
+            "while recovery runs"
+        ),
+    )
     rk.set_defaults(fn=cmd_rename_key)
 
     pl = sub.add_parser("plan", help="show what apply would do")
