@@ -92,6 +92,16 @@ def test_load_files_rejects_a_key_that_does_not_match_its_filename(tmp_path):
         w.load_files()
 
 
+def test_load_files_rejects_a_non_identifier_filename(tmp_path):
+    w = make_world(tmp_path, 'player = "alice"\n')
+    (w.objects_dir / "café.moo").write_text(
+        'object cafe\n  name: "Café"\n  parent: $room\nendobject\n'
+    )
+
+    with pytest.raises(MooError, match="ASCII identifier"):
+        w.load_files()
+
+
 def test_load_files_rejects_case_collisions(tmp_path, monkeypatch):
     w = make_world(tmp_path, 'player = "alice"\n')
 
@@ -162,6 +172,12 @@ def test_registry_value_accepts_parallel_key_and_object_lists():
     assert partially_migrated.generations == {"hall": "generation-hall", "door": None}
 
 
+@pytest.mark.parametrize("key", ["../outside", "/absolute", "café", "bad-key"])
+def test_registry_value_rejects_keys_that_are_not_ascii_identifiers(key):
+    with pytest.raises(MooError, match="malformed registry"):
+        registry_value([[key], [Obj(10)]])
+
+
 def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):
     w = World("test", tmp_path, "alice", {})
     obj = ObjectDef(key="hall", name="Hall", parent=Obj(2))
@@ -170,6 +186,25 @@ def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):
 
     assert path == tmp_path / "worlds" / "test" / "objects" / "hall.moo"
     assert w.load_files() == {"hall": obj}
+
+
+@pytest.mark.parametrize("key", ["../outside", "/absolute", "café", "bad-key"])
+def test_file_for_rejects_keys_that_are_not_ascii_identifiers(tmp_path, key):
+    w = World("test", tmp_path, "alice", {})
+
+    with pytest.raises(MooError, match="ASCII identifier"):
+        w.file_for(key)
+
+
+def test_write_file_refuses_a_resolved_path_outside_objects_directory(tmp_path, monkeypatch):
+    w = World("test", tmp_path, "alice", {})
+    outside = tmp_path / "outside.moo"
+    monkeypatch.setattr(w, "file_for", lambda key: outside)
+
+    with pytest.raises(MooError, match="outside the objects directory"):
+        w.write_file(ObjectDef(key="hall", name="Hall", parent=Obj(2)))
+
+    assert not outside.exists()
 
 
 class BootstrapTransport:

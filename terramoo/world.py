@@ -97,7 +97,7 @@ def registry_value(raw) -> Registry:
     if isinstance(raw, list) and len(raw) in (2, 3) and all(isinstance(x, list) for x in raw):
         keys, objects = raw[:2]
         nonces = raw[2] if len(raw) == 3 else [None] * len(keys)
-        valid_keys = all(isinstance(k, str) for k in keys)
+        valid_keys = all(objdef.is_identifier(k) for k in keys)
         valid_objects = all(isinstance(o, Obj) for o in objects)
         valid_nonces = all(n is None or isinstance(n, str) for n in nonces)
         unique_keys = valid_keys and len({k.lower() for k in keys}) == len(keys)
@@ -116,6 +116,14 @@ def registry_value(raw) -> Registry:
             normalized_nonces = [n or None for n in nonces]
             return Registry(zip(keys, objects), dict(zip(keys, normalized_nonces)))
     raise MooError("toolbox has a malformed registry")
+
+
+def validate_key(value: object) -> str:
+    """Return an object/registry key, or reject it before it reaches a path or MOO."""
+    try:
+        return objdef.validate_identifier(value, "registry key")
+    except objdef.FormatError as e:
+        raise MooError(str(e)) from None
 
 
 @dataclass
@@ -174,7 +182,16 @@ class World:
         return self.dir / "state.json"
 
     def file_for(self, key: str) -> Path:
-        return self.objects_dir / f"{key}.moo"
+        key = validate_key(key)
+        path = self.objects_dir / f"{key}.moo"
+        self._check_object_path(path)
+        return path
+
+    def _check_object_path(self, path: Path) -> None:
+        try:
+            path.resolve().relative_to(self.objects_dir.resolve())
+        except ValueError:
+            raise MooError(f"refusing to write {path}: path is outside the objects directory") from None
 
     def describe(self) -> str:
         c = self.connection
@@ -188,6 +205,10 @@ class World:
         out = {}
         folded: dict[str, str] = {}
         for path in sorted(self.objects_dir.glob("*.moo")):
+            try:
+                validate_key(path.stem)
+            except MooError as e:
+                raise MooError(f"{path.relative_to(self.root)}: {e}") from None
             try:
                 obj = objdef.parse(path.read_text())
             except ValueError as e:  # FormatError and LiteralError are ValueErrors
@@ -204,6 +225,7 @@ class World:
     def write_file(self, obj: ObjectDef) -> Path:
         self.objects_dir.mkdir(parents=True, exist_ok=True)
         path = self.file_for(obj.key)
+        self._check_object_path(path)
         path.write_text(objdef.render(obj))
         return path
 

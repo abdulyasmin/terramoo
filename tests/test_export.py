@@ -6,7 +6,7 @@ import pytest
 
 from terramoo import cli, export as export_mod, moolit, objdef, plan
 from terramoo.errors import MooError
-from terramoo.model import PropDef, VerbDef
+from terramoo.model import ObjectDef, PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
 from terramoo.refs import Refs
 
@@ -297,3 +297,16 @@ def test_export_rejects_incomplete_and_malformed_helper_records(records, expecte
 
     with pytest.raises(MooError, match=expected):
         export_mod.export(world, refs, ["hall"])
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [("Café", "cafe"), ("مرحبا", "obj_"), ("123 Hall", "obj_123_hall")],
+)
+def test_slug_returns_an_ascii_key_that_round_trips_through_objdef(name, expected):
+    key = export_mod.slug(name, set())
+    rendered = objdef.render(ObjectDef(key=key, name=name, parent=Obj(2)))
+
+    assert key == expected
+    assert key.isascii()
+    assert objdef.parse(rendered).key == key

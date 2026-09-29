@@ -24,6 +24,7 @@ class FormatError(ValueError):
 
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_IDENT_RE = re.compile(rf"{_IDENT}\Z", re.ASCII)
 _QUOTED_IDENT = r'"(?:[^"\\]|\\.)*"'
 _HEAD_RE = re.compile(rf"^object\s+({_IDENT})\s*$")
 _FIELD_RE = re.compile(rf"^\s*({_IDENT}):\s*(.*?)\s*$")
@@ -31,6 +32,17 @@ _PROP_RE = re.compile(rf'^\s*property\s+({_QUOTED_IDENT}|\S+)\s*\((.*?)\)\s*=\s*
 _OVERRIDE_RE = re.compile(rf'^\s*override\s+({_QUOTED_IDENT}|\S+)\s*=\s*(.*)$', re.S)
 _VERB_RE = re.compile(rf'^\s*verb\s+({_QUOTED_IDENT}|\S+)\s*\((\S+)\s+(.+?)\s+(\S+)\)\s*(.*?)\s*$')
 _OPT_RE = re.compile(r'(\w+):\s*("(?:[^"\\]|\\.)*"|\S+)')
+
+
+def is_identifier(value: object) -> bool:
+    """Whether `value` is the ASCII identifier accepted for object keys."""
+    return isinstance(value, str) and _IDENT_RE.fullmatch(value) is not None
+
+
+def validate_identifier(value: object, label: str = "object key") -> str:
+    if not is_identifier(value):
+        raise FormatError(f"{label} must be an ASCII identifier (letters, digits, and underscores): {value!r}")
+    return value
 
 
 def _parse_ref(text: str):
@@ -217,6 +229,7 @@ def _render_value(value) -> str:
 
 
 def render(obj: ObjectDef) -> str:
+    validate_identifier(obj.key)
     out = [
         f"object {obj.key}",
         f"  name: {moolit.escape(obj.name, dialect=LITERAL_DIALECT, raw_unicode=True)}",

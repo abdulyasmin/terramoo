@@ -3,11 +3,12 @@
 import re
 import socket
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
-from terramoo import export as export_mod
+from terramoo import export as export_mod, moolit
 from terramoo.errors import MooError
 from terramoo.moolit import Obj
 from terramoo.refs import Refs
@@ -128,8 +129,9 @@ def test_program_is_one_line_with_the_configured_prefix_and_tell():
     t = Telnet("h", 1, "p", "x", eval_prefix=";", tell="player:tell({})", chunk=10)
     line = t.program("~abcdefghij~", "1 + 1")
     assert "\n" not in line
+    assert line.isascii()
     assert line.startswith(';player:tell("~abcdefghij~S"); try _r = (1 + 1);')
-    assert 'length("é")' in line
+    assert r'length("\u00E9")' in line
     assert "_v[_i * 10 + 1..min((_i + 1) * 10, length(_v))]" in line
 
 
@@ -147,11 +149,69 @@ def test_wire_strips_and_refuses_telnet_negotiation():
 def test_wire_closed_drains_complete_lines_before_reporting_eof():
     a, b = socket.socketpair()
     wire = _Wire(a)
+    a.settimeout(0.25)
     b.sendall(b"last notice\r\n")
     b.shutdown(socket.SHUT_WR)
 
     assert wire.closed() is True
     assert list(wire.lines) == ["last notice"]
+    assert a.gettimeout() == 0.25
+
+
+def test_request_gives_both_writes_one_deadline():
+    class DeadlineWire:
+        def __init__(self):
+            self.sent = []
+            self.lines = []
+            self.sock = SimpleNamespace(close=lambda: None)
+
+        def send_line(self, line, deadline):
+            self.sent.append((line, deadline))
+            if len(self.sent) == 2:
+                tag = TAG.search(self.sent[0][0]).group(1)
+                self.lines = [tag + "S", tag + "B1", tag + "C1", tag + "D1", tag + "E", tag + "Z"]
+
+        def read_line(self, deadline):
+            return self.lines.pop(0)
+
+    t = Telnet("local", 0, "alice", "pw")
+    t._wire = DeadlineWire()
+    before = time.monotonic()
+
+    assert t._request("1", 3) == 1
+    assert len(t._wire.sent) == 2
+    assert t._wire.sent[0][1] == t._wire.sent[1][1]
+    assert t._wire.sent[0][1] > before
+
+
+def test_second_write_failure_is_an_ambiguous_moo_error_and_closes():
+    class FailedSocket:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FailedWire:
+        def __init__(self):
+            self.sock = FailedSocket()
+            self.writes = 0
+
+        def send_line(self, line, deadline=None):
+            self.writes += 1
+            if self.writes == 2:
+                raise OSError("peer reset")
+
+    t = Telnet("local", 0, "alice", "pw")
+    wire = FailedWire()
+    t._wire = wire
+
+    with pytest.raises(MooError, match="outcome is unknown"):
+        t._request("potentially_destructive_call()", 3)
+
+    assert wire.writes == 2
+    assert wire.sock.closed is True
+    assert t._wire is None
 
 
 def test_connection_close_mid_request_is_reported_without_retry(monkeypatch):
@@ -266,3 +326,46 @@ def test_moor_escaped_nested_export_record_uses_moor_dialect(monkeypatch):
 
     assert obj.name == "Hé"
     assert obj.props[0].value == "م\n"
+
+
+@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after"])
+def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, value):
+    literal = moolit.serialize(value, dialect=moolit.MOOR)
+
+    def reply(tag, line):
+        if tag is None:
+            return ["*** Connected ***"]
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        answer_literal = "1" if "_r = (player)" in line or "_r = (1)" in line else literal
+        return [tag + "S", tag + "B" + str(len(answer_literal)), tag + "C1",
+                tag + "D" + answer_literal, tag + "E"]
+
+    fake = FakeMoo(reply)
+    t = client(monkeypatch, fake)
+    assert t.eval("1") == 1
+    assert t.literal_dialect == moolit.MOOR
+
+    assert t.eval(t.serialize(value)) == value
+    assert all(line.isascii() and all(0x20 <= ord(char) <= 0x7E for char in line) for line in fake.received)
+
+
+@pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after"])
+def test_lambdamoo_telnet_rejects_string_bytes_the_server_would_drop(monkeypatch, value):
+    def reply(tag, line):
+        if tag is None:
+            return ["*** Connected ***"]
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        return [tag + "S", tag + "B1", tag + "C2", tag + "D1", tag + "E"]
+
+    fake = FakeMoo(reply)
+    t = client(monkeypatch, fake)
+    assert t.eval("1") == 1
+    assert t.literal_dialect == moolit.LAMBDA
+    before = len(fake.received)
+
+    with pytest.raises(MooError, match="printable ASCII"):
+        t.eval(t.serialize(value))
+
+    assert len(fake.received) == before

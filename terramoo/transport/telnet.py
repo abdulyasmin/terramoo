@@ -69,6 +69,7 @@ class _Wire:
         """Whether the MOO has hung up (a second login as the same player
         boots this one, on LambdaCore and its descendants).  Whatever it
         said first is read into `lines` on the way."""
+        previous_timeout = self.sock.gettimeout()
         try:
             self.sock.setblocking(False)
             while True:
@@ -82,13 +83,28 @@ class _Wire:
             return True
         finally:
             try:
-                self.sock.setblocking(True)
+                self.sock.settimeout(previous_timeout)
             except OSError:
                 pass
 
-    def send_line(self, text: str) -> None:
-        data = text.encode("utf-8").replace(bytes([IAC]), bytes([IAC, IAC]))
-        self.sock.sendall(data + b"\r\n")
+    def send_line(self, text: str, deadline: float) -> None:
+        """Send one printable-ASCII command before an absolute deadline."""
+        if not text.isascii() or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+            raise MooError(
+                "telnet commands must be printable ASCII; this server cannot safely receive that value"
+            )
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the telnet write deadline passed")
+        previous_timeout = self.sock.gettimeout()
+        self.sock.settimeout(left)
+        try:
+            self.sock.sendall(text.encode("ascii") + b"\r\n")
+        finally:
+            try:
+                self.sock.settimeout(previous_timeout)
+            except OSError:
+                pass
 
     def read_line(self, deadline: float) -> str | None:
         """The next line, or None once `deadline` (time.monotonic) passes."""
@@ -199,7 +215,14 @@ class Telnet(Transport):
         self._wire = _Wire(sock)
         # Let the banner arrive, then log in.
         self._drain(1.0)
-        self._wire.send_line(self.login_template.format(player=self.player, password=self.password))
+        try:
+            self._wire.send_line(
+                self.login_template.format(player=self.player, password=self.password),
+                time.monotonic() + self.connect_timeout,
+            )
+        except (MooError, OSError) as e:
+            self.close()
+            raise MooError(f"could not send the login command to {self.host}:{self.port}: {e}") from None
         try:
             self._request("player", self.connect_timeout, login=True)
         except MooError as e:
@@ -240,7 +263,7 @@ class Telnet(Transport):
             f"{self.eval_prefix}{self._tell(q(tag + 'S'))}; "
             f"try _r = ({expression}); _v = toliteral(_r); "
             f"{self._tell(q(tag + 'B') + ' + tostr(length(_v))')}; "
-            f"{self._tell(q(tag + 'C') + ' + tostr(length(\"é\"))')}; "
+            f"{self._tell(q(tag + 'C') + r' + tostr(1 + (length("\u00E9") != 1))')}; "
             f"for _i in [0..(length(_v) - 1) / {n}] "
             f"{self._tell(q(tag + 'D') + f' + _v[_i * {n} + 1..min((_i + 1) * {n}, length(_v))]')}; "
             f"if (_i % 16 == 15) suspend(0); endif "
@@ -256,15 +279,24 @@ class Telnet(Transport):
             raise MooError("a value with a newline in it cannot be sent over telnet")
         wire = self._wire
         tag = "~" + "".join(random.choices(string.ascii_letters + string.digits, k=10)) + "~"
-        wire.send_line(self.program(tag, expression))
-        wire.send_line(f"{self.eval_prefix}{self._tell(self.escape(tag + 'Z'))}")
+        deadline = time.monotonic() + timeout
+        try:
+            wire.send_line(self.program(tag, expression), deadline)
+            wire.send_line(f"{self.eval_prefix}{self._tell(self.escape(tag + 'Z'))}", deadline)
+        except MooError:
+            raise
+        except OSError as e:
+            self.close()
+            raise MooError(
+                f"the telnet request could not be written ({e}); its outcome is unknown; "
+                "the connection was closed and the request was not retried"
+            ) from None
         started = sentinel = False
         chunks: list[bytes] = []
         expected_length: int | None = None
         length_unit: int | None = None
         untagged: list[str] = []
         outcome = None
-        deadline = time.monotonic() + timeout
         while True:
             line = wire.read_line(deadline)
             if line is None:

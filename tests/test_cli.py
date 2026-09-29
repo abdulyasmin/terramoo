@@ -191,6 +191,18 @@ def test_adopt_rejects_managed_object_before_sending_or_persisting(monkeypatch):
     assert world.saved == []
 
 
+@pytest.mark.parametrize("key", ["../outside", "/absolute", "café", "bad-key"])
+def test_adopt_rejects_non_identifier_keys_before_registration(monkeypatch, key):
+    world = AdoptWorld()
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="ASCII identifier"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key=key, verify=False))
+
+    assert world.sent == []
+    assert world.saved == []
+
+
 def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
     world = AdoptWorld({"Hall": Obj(10)})
     world.objects_dir = tmp_path

@@ -17,7 +17,7 @@ from .errors import MooError
 from .model import ordered_like
 from .moolit import Obj
 from .secrets import check_secret, store_secret
-from .world import World, find_root
+from .world import World, find_root, validate_key
 
 _open: list[World] = []
 
@@ -174,19 +174,20 @@ def cmd_adopt(args):
         if not args.object or not args.key:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
         o = parse_object_arg(args.object)
-        existing_key = next((key for key in refs.registry if key.lower() == args.key.lower()), None)
+        requested_key = validate_key(args.key)
+        existing_key = next((key for key in refs.registry if key.lower() == requested_key.lower()), None)
         if verify:
             if existing_key is None or refs.registry[existing_key] != o:
                 actual = refs.registry.get(existing_key) if existing_key is not None else "not registered"
-                raise MooError(f"cannot verify {args.key} as {o}: current binding is {actual}")
+                raise MooError(f"cannot verify {requested_key} as {o}: current binding is {actual}")
             new.append((existing_key, o))
         elif existing_key is not None:
-            raise MooError(f"{args.key} is already {refs.registry[existing_key]}")
+            raise MooError(f"{requested_key} is already {refs.registry[existing_key]}")
         managed_as = next((key for key, obj in refs.registry.items() if obj == o), None)
         if not verify and managed_as is not None:
             raise MooError(f"{o} is already managed as {managed_as}")
         if not verify:
-            new.append((args.key, o))
+            new.append((requested_key, o))
     if not new:
         print("nothing to adopt")
         return

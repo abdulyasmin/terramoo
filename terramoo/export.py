@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from . import moolit
+import unicodedata
+
+from . import moolit, objdef
 from .errors import MooError
 from .model import ObjectDef, PropDef, VerbDef, normalize
 from .moolit import Obj
@@ -162,7 +164,8 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
 
 
 def slug(name: str, taken: set[str]) -> str:
-    base = "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_")
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    base = "".join(c if c.isalnum() else "_" for c in ascii_name.lower()).strip("_")
     while "__" in base:
         base = base.replace("__", "_")
     if not base or not base[0].isalpha():
@@ -171,5 +174,6 @@ def slug(name: str, taken: set[str]) -> str:
     while key in taken:
         key = f"{base}_{n}"
         n += 1
+    objdef.validate_identifier(key)
     taken.add(key)
     return key
