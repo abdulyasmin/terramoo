@@ -135,6 +135,30 @@ class BootstrapTransport:
         return "installed"
 
 
+def test_player_mismatch_is_never_cached_as_a_valid_identity(tmp_path):
+    class WrongPlayerTransport:
+        can_suspend = True
+
+        def __init__(self):
+            self.expressions = []
+
+        def eval(self, expression):
+            self.expressions.append(expression)
+            if expression == "{player, player.name}":
+                return [Obj(2), "mallory"]
+            pytest.fail(f"bootstrap continued after identity mismatch: {expression}")
+
+    transport = WrongPlayerTransport()
+    w = World("test", tmp_path, "alice", {}, _transport=transport)
+
+    with pytest.raises(MooError, match="logged in as mallory"):
+        w.bootstrap(log=lambda _: None)
+    with pytest.raises(MooError, match="logged in as mallory"):
+        _ = w.player
+
+    assert transport.expressions == ["{player, player.name}", "{player, player.name}"]
+
+
 def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     transport = BootstrapTransport()
     w = World("test", tmp_path, "alice", {}, _transport=transport, _player=Obj(1))

@@ -209,9 +209,9 @@ class World:
     def player(self) -> Obj:
         if self._player is None:
             who, name = self.eval("{player, player.name}")
-            self._player = who
             if name.lower() != self.player_name.lower():
                 raise MooError(f"logged in as {name} ({who}), but world.toml says player = {self.player_name!r}")
+            self._player = who
         return self._player
 
     def _find_toolbox(self) -> Obj | None:
