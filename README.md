@@ -114,6 +114,8 @@ world; `override` is the one keyword of ours.
   `terramoo/helper/`. They are plain LambdaMOO 1.8, so one copy runs on
   every server, and they refuse any caller but their owner. Re-run
   `tmoo bootstrap` after upgrading terramoo to install updated helpers.
+  The idempotent destroy operation requires the updated `tmoo_apply` helper:
+  run `tmoo bootstrap` before using `apply --destroy` with this version.
 - The toolbox holds the *registry*, `key -> #nnn`. It lives in the MOO, so a
   rollback rolls it back too; `worlds/<world>/state.json` is a local copy.
 - `plan` diffs the files against the live objects. A `@ref` to a key with no
@@ -122,6 +124,9 @@ world; `override` is the one keyword of ours.
   lost), re-reads them to correct what the core's `initialize` set, then
   sends the rest in batches. A failed op is reported and the rest carry on.
   Nothing is recycled without `--destroy`.
+  Destroy checks that the key still names the expected object, recycles it
+  if it exists, and unregisters it in one helper call. Retrying also removes
+  registrations for objects already gone; a failed recycle keeps the entry.
 - Both transports send one expression per request and parse its
   `toliteral()` text. Telnet tags its answer so other players' chatter is
   ignored (see `terramoo/transport/telnet.py`).

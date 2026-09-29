@@ -45,6 +45,23 @@ for op in (ops)
         reg = {{@reg[1], op[2]}, {@reg[2], r}};
       endif
       this.registry = reg;
+    elseif (kind == "destroy")
+      "Destroy {key, expected object} in one call; retries also remove already-gone objects.";
+      i = op[2] in reg[1];
+      if (i)
+        o = reg[2][i];
+        if (o != op[3])
+          raise(E_INVARG, tostr("key ", reg[1][i], " is now registered as ", o));
+        endif
+        if (valid(o))
+          recycle(o);
+        endif
+        if (valid(o))
+          raise(E_INVARG, tostr("object ", o, " is still valid after recycle"));
+        endif
+        reg = {listdelete(reg[1], i), listdelete(reg[2], i)};
+        this.registry = reg;
+      endif
     elseif (kind == "recycle")
       recycle(op[2]);
     elseif (kind == "unregister")

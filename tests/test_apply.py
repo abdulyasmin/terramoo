@@ -43,7 +43,7 @@ class FakeWorld:
 
     def _op(self, op):
         self.sent.append(op)
-        if op[0] == "unregister":
+        if op[0] == "destroy":
             self.registry.pop(op[1], None)
             return [1, 1]
         if op[0] != "create":
@@ -112,7 +112,7 @@ def test_orphans_are_only_recycled_when_destroy_is_explicit():
     destroyed_refs = Refs(player=ME, registry={"old": old})
     outcome = apply.run(destroyed, p, destroyed_refs, files={}, destroy=True, log=lambda _: None)
     assert outcome.failed == []
-    assert destroyed.sent == [["recycle", old], ["unregister", "old"]]
+    assert destroyed.sent == [["destroy", "old", old]]
     assert destroyed_refs.registry == {}
     assert destroyed.saved == {}
 
@@ -123,7 +123,7 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
 
     class PartlyFailedRecycleWorld(FakeWorld):
         def _op(self, op):
-            if op == ["recycle", blocked]:
+            if op == ["destroy", "blocked", blocked]:
                 self.sent.append(op)
                 return [0, "E_PERM", "recycle refused"]
             return super()._op(op)
@@ -142,13 +142,36 @@ def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
     )
 
     assert w.sent == [
-        ["recycle", blocked],
-        ["recycle", removable],
-        ["unregister", "removable"],
+        ["destroy", "blocked", blocked],
+        ["destroy", "removable", removable],
     ]
     assert outcome.failed == [("recycle blocked (#201)", "E_PERM: recycle refused")]
     assert refs.registry == {"blocked": blocked}
     assert w.saved == {"blocked": blocked}
+
+
+def test_destroy_recovers_an_already_recycled_orphan_in_one_helper_call():
+    old = Obj(201)
+
+    class GoneWorld(FakeWorld):
+        def _op(self, op):
+            self.sent.append(op)
+            if op == ["recycle", old]:
+                return [0, "E_INVARG", "invalid object"]
+            if op == ["destroy", "old", old]:
+                self.registry.pop("old", None)
+                return [1, 1]
+            pytest.fail(f"unexpected operation: {op}")
+
+    w = GoneWorld()
+    w.registry = {"old": old}
+    refs = Refs(player=ME, registry=dict(w.registry))
+    for _ in range(2):
+        pending = plan.build({}, {}, refs)
+        outcome = apply.run(w, pending, refs, files={}, destroy=True, log=lambda _: None)
+        assert outcome.failed == []
+        assert refs.registry == w.saved == {}
+    assert w.batches == [[["destroy", "old", old]]]
 
 
 def test_ops_are_split_before_the_configured_batch_limit():
