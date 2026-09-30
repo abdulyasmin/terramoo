@@ -71,44 +71,54 @@ elseif (mode == "reconcile")
     "The callback's own nested tmoo_apply wrote this state; accept it.";
     reg = current;
   elseif (protected_revision > before[4])
-    touched = {};
-    i = 0;
-    for old_key in (before[1])
-      i = i + 1;
-      found = 0;
-      j = 0;
-      for new_key in (reg[1])
-        j = j + 1;
-        if (equal(old_key, new_key))
-          found = j;
-        endif
-      endfor
-      if (!found || !equal(before[2][i], reg[2][found]) || !equal(before[3][i], reg[3][found]))
-        touched = setadd(touched, old_key);
-      endif
-    endfor
-    j = 0;
-    for new_key in (reg[1])
-      j = j + 1;
-      found = 0;
-      i = 0;
-      for old_key in (before[1])
-        i = i + 1;
-        if (equal(new_key, old_key))
-          found = i;
-        endif
-      endfor
-      if (!found || !equal(reg[2][j], before[2][found]) || !equal(reg[3][j], before[3][found]))
-        touched = setadd(touched, new_key);
-      endif
-    endfor
-    if (!touched)
-      touched = reg[1];
-    endif
+    callback = reg;
     this._terramoo_registry_revision = current[4];
     this._terramoo_registry_state = current;
     this.registry = current;
-    raise(E_INVARG, tostr("registry conflict during callback; callback touched ", toliteral(touched), "; rerun the operation"));
+    detail = "unknown keys";
+    valid_shape = typeof(callback[1]) == typeof({}) && typeof(callback[2]) == typeof({}) && typeof(callback[3]) == typeof({}) && typeof(before[1]) == typeof({}) && typeof(before[2]) == typeof({}) && typeof(before[3]) == typeof({}) && length(callback[1]) == length(callback[2]) && length(callback[1]) == length(callback[3]) && length(before[1]) == length(before[2]) && length(before[1]) == length(before[3]);
+    if (valid_shape)
+      if (length(callback[1]) > 50 || length(before[1]) > 50)
+        detail = "many keys";
+      else
+        touched = {};
+        i = 0;
+        for old_key in (before[1])
+          i = i + 1;
+          found = 0;
+          j = 0;
+          for new_key in (callback[1])
+            j = j + 1;
+            if (equal(old_key, new_key))
+              found = j;
+            endif
+          endfor
+          if (!found || !equal(before[2][i], callback[2][found]) || !equal(before[3][i], callback[3][found]))
+            touched = setadd(touched, old_key);
+          endif
+        endfor
+        j = 0;
+        for new_key in (callback[1])
+          j = j + 1;
+          found = 0;
+          i = 0;
+          for old_key in (before[1])
+            i = i + 1;
+            if (equal(new_key, old_key))
+              found = i;
+            endif
+          endfor
+          if (!found || !equal(callback[2][j], before[2][found]) || !equal(callback[3][j], before[3][found]))
+            touched = setadd(touched, new_key);
+          endif
+        endfor
+        if (!touched)
+          touched = callback[1];
+        endif
+        detail = toliteral(touched);
+      endif
+    endif
+    raise(E_INVARG, tostr("registry conflict during callback; callback touched ", detail, "; rerun the operation"));
   else
     revision = revision + 1;
   endif

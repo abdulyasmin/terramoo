@@ -19,10 +19,8 @@ for op in (ops)
     registry_revision = reg_length > 3 ? reg[4] | 0;
     if (protected_registry)
       protected_revision = this._terramoo_registry_revision;
-      revision = registry_revision;
-      if (revision < protected_revision)
-        revision = protected_revision + 1;
-      endif
+      protected_state = this._terramoo_registry_state;
+      revision = registry_revision > protected_revision ? registry_revision | protected_revision;
     elseif (registry_revision > revision)
       revision = registry_revision;
     endif
@@ -38,6 +36,10 @@ for op in (ops)
       reg[4] = revision;
     endif
     if (protected_registry)
+      if (!(equal(reg[1], protected_state[1]) && equal(reg[2], protected_state[2]) && equal(reg[3], protected_state[3])) || registry_revision < protected_revision)
+        revision = revision + 1;
+        reg[4] = revision;
+      endif
       this._terramoo_registry_revision = revision;
       this._terramoo_registry_state = reg;
     endif
