@@ -24,8 +24,12 @@ tmoo apply [--destroy]   # MOO <- files (asks first; -y skips; --destroy recycle
 tmoo diff [key...]       # unified diff, live rendering against the files
 ```
 
-`tmoo rename-key --recover` is an explicit operator recovery command. Do not
-edit files under the world's `objects/` directory while it runs.
+`tmoo rename-key --recover` is an explicit operator recovery command. An
+interrupted or uncertain rename preserves
+`worlds/<world>/state.json.rename-recovery.json`; do not edit files under the
+world's `objects/` directory while recovery runs. File-writing commands use
+`worlds/<world>/.cache/write.lock`; another such command for that world fails
+rather than waiting.
 
 Install with `uv tool install git+<this repo's URL>`, or add it as a
 dependency of a repo that holds your worlds. `tmoo` uses the nearest
