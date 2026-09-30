@@ -146,12 +146,26 @@ world; `override` is the one keyword of ours.
 - Registries created by older terramoo versions have no generation nonces.
   Status marks these bindings unverified; export, mutation, and destruction
   refuse them. Inspect the live object, then run
-  `tmoo adopt '#123' key --verify` to stamp the confirmed binding. Re-run
-  `tmoo bootstrap` first when terramoo reports outdated toolbox helpers.
+  `tmoo adopt '#123' key --verify` to stamp the confirmed binding; it keeps
+  an existing object file and writes the live definition only when none
+  exists. Re-run `tmoo bootstrap` first when terramoo reports outdated
+  toolbox helpers.
   Bootstrap migrates the registry in a single non-suspending MOO task.
 - Both transports send one expression per request and parse its
   `toliteral()` text. Telnet tags its answer so other players' chatter is
   ignored (see `terramoo/transport/telnet.py`).
+
+## Upgrading from a pre-nonce terramoo
+
+Back up the MOO database together with the world files, then install the
+new terramoo and run `tmoo bootstrap`. Inspect each live binding and confirm
+it with `tmoo adopt '#123' key --verify`; existing object files are kept.
+Run `tmoo plan`, review the changes, then `tmoo apply` and `tmoo plan` again.
+
+Rolling back only the tool is unsafe: an older terramoo reads the migrated
+four-element registry as empty, so it plans duplicate creates, reports
+"no changes" for `apply --destroy`, and replaces bindings if re-bootstrapped.
+A rollback must restore the pre-upgrade database and world files together.
 
 ## Portability notes
 

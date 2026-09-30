@@ -127,8 +127,8 @@ def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
     return [o for o in owned if o not in known]
 
 
-def _write_exports(w: World, refs, keys) -> int:
-    """Write the files for `keys` from the live objects; how many were written."""
+def _write_exports(w: World, refs, keys, *, keep_existing: bool = False) -> int:
+    """Write live definitions, optionally keeping local files; return the count written."""
     safe_keys = []
     for key in keys:
         actual_key = _registry_key(refs, key) or key
@@ -153,6 +153,12 @@ def _write_exports(w: World, refs, keys) -> int:
             )
             continue
         file_key = existing.get(actual_key.lower(), actual_key)
+        if keep_existing and actual_key.lower() in existing:
+            print(
+                f"  {file_key}.moo: local definition kept; "
+                "`tmoo plan` shows any difference from the live object"
+            )
+            continue
         obj.key = file_key
         path = w.file_for(file_key)
         if path.exists():
@@ -279,7 +285,7 @@ def _adopt_locked(w: World, args) -> None:
         print(f"  {actual} = {obj}")
         export_keys.append(actual)
     if export_keys:
-        _write_exports(w, refs, export_keys)
+        _write_exports(w, refs, export_keys, keep_existing=verify)
     w.save_state(refs.snapshot())
     if problems:
         raise MooError(f"adoption failed: {'; '.join(problems)}")
