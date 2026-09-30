@@ -191,14 +191,28 @@ def test_registry_value_accepts_and_marks_legacy_non_identifier_keys():
     assert registry.legacy_keys == {"bad-key", "مرحبا"}
 
 
-def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path):
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_write_file_creates_the_objects_directory_and_round_trips(tmp_path, exclusive):
     w = World("test", tmp_path, "alice", {})
     obj = ObjectDef(key="hall", name="Hall", parent=Obj(2))
 
-    path = w.write_file(obj)
+    path = w.write_file(obj, exclusive=exclusive)
 
     assert path == tmp_path / "worlds" / "test" / "objects" / "hall.moo"
     assert w.load_files() == {"hall": obj}
+
+
+def test_write_file_exclusive_preserves_an_existing_file(tmp_path):
+    w = World("test", tmp_path, "alice", {})
+    obj = ObjectDef(key="hall", name="Hall", parent=Obj(2))
+    path = w.write_file(obj)
+    desired_bytes = b"editor content\r\nwith original formatting\r\n"
+    path.write_bytes(desired_bytes)
+
+    with pytest.raises(FileExistsError):
+        w.write_file(obj, exclusive=True)
+
+    assert path.read_bytes() == desired_bytes
 
 
 @pytest.mark.parametrize("key", ["../outside", "/absolute", "café", "bad-key"])

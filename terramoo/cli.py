@@ -153,7 +153,19 @@ def _write_exports(w: World, refs, keys, *, keep_existing: bool = False) -> int:
             )
             continue
         file_key = existing.get(actual_key.lower(), actual_key)
-        if keep_existing and actual_key.lower() in existing:
+        if keep_existing:
+            if actual_key.lower() not in existing:
+                obj.key = file_key
+                # Exclusive creation protects files appearing after the snapshot.
+                # On case-sensitive filesystems it cannot detect a concurrent
+                # file differing only in case; the snapshot covers earlier ones.
+                try:
+                    w.write_file(obj, exclusive=True)
+                except FileExistsError:
+                    pass
+                else:
+                    written += 1
+                    continue
             print(
                 f"  {file_key}.moo: local definition kept; "
                 "`tmoo plan` shows any difference from the live object"

@@ -277,11 +277,13 @@ class World:
             out[obj.key] = obj
         return out
 
-    def write_file(self, obj: ObjectDef) -> Path:
+    def write_file(self, obj: ObjectDef, *, exclusive: bool = False) -> Path:
         self.objects_dir.mkdir(parents=True, exist_ok=True)
         path = self.file_for(obj.key)
         self._check_object_path(path)
-        path.write_text(objdef.render(obj))
+        text = objdef.render(obj)
+        with path.open("x" if exclusive else "w") as stream:
+            stream.write(text)
         return path
 
     # ----- the MOO

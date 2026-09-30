@@ -975,6 +975,69 @@ def test_adopt_verify_preserves_local_edits_but_plain_adopt_rewrites(
     assert [p.name for p in files.objects_dir.glob("*.moo")] == [f"{file_key}.moo"]
 
 
+@pytest.mark.parametrize("verify", [True, False])
+def test_adopt_file_created_after_snapshot(tmp_path, monkeypatch, capsys, verify):
+    world = AdoptWorld()
+    if verify:
+        world.raw_registry = [["hall"], [Obj(10)]]
+    files = World("test", tmp_path, "alice", {})
+    files.objects_dir.mkdir(parents=True)
+    world.objects_dir = files.objects_dir
+    world.write_file = files.write_file
+    path = files.file_for("hall")
+    desired = objdef.render(ObjectDef(key="hall", name="Restored local edit", parent=Obj(2)))
+    desired_bytes = desired.replace("\n", "\r\n").encode()
+    file_for = files.file_for
+    created = []
+
+    def create_after_snapshot(key):
+        target = file_for(key)
+        if not created:
+            # _write_exports has already collected the directory snapshot.
+            assert not target.exists()
+            target.write_bytes(desired_bytes)
+            created.append(target)
+        return target
+
+    def register(call):
+        _, arg = call
+        _, key, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [[key], [obj], [nonce]]
+        return [[1, obj]]
+
+    world.reply = register
+    monkeypatch.setattr(files, "file_for", create_after_snapshot)
+    world.file_for = files.file_for
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli.export_mod, "export", lambda w, refs, keys: {
+        "hall": ObjectDef(key="hall", name="Live hall", parent=Obj(2))
+    })
+    write_exports = cli._write_exports
+    written = []
+
+    def record_written(*args, **kwargs):
+        count = write_exports(*args, **kwargs)
+        written.append(count)
+        return count
+
+    monkeypatch.setattr(cli, "_write_exports", record_written)
+
+    cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="hall", verify=verify))
+
+    assert created == [path]
+    assert written == [0 if verify else 1]
+    output = capsys.readouterr().out
+    if verify:
+        assert path.read_bytes() == desired_bytes
+        assert output.splitlines().count(
+            "  hall.moo: local definition kept; `tmoo plan` shows any difference from the live object"
+        ) == 1
+    else:
+        assert objdef.parse(path.read_text()).name == "Live hall"
+        assert path.read_bytes() != desired_bytes
+        assert "local definition kept" not in output
+
+
 @pytest.mark.parametrize("reply", [7, [], [[1]]])
 def test_adopt_rejects_malformed_helper_results(reply, monkeypatch):
     world = AdoptWorld(reply=reply)
