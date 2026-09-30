@@ -68,7 +68,7 @@ graph TD
 | Diff | [plan.py](terramoo/plan.py) | `build()` / `diff_object()`: takes two dicts of `ObjectDef` and returns a `Plan` (creates, ops, destroys, problems). Pure. |
 | MOO I/O | [export.py](terramoo/export.py), [apply.py](terramoo/apply.py), [world.py](terramoo/world.py) | Read live objects, run a plan, bootstrap the toolbox and keep `state.json` up to date. |
 | Wire | [transport/](terramoo/transport/__init__.py) | `eval(expression) → value` over telnet (any MOO) or MCP (hosted gates). |
-| In-MOO | [helper/*.moo](terramoo/helper/) | Six verbs installed on the toolbox: `tmoo_registry`, `tmoo_callback`, `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They do every loop and every side effect. |
+| In-MOO | [helper/*.moo](terramoo/helper/) | Seven verbs installed on the toolbox: `tmoo_registry`, `tmoo_callback`, `tmoo_generation`, `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They do every loop and every side effect. |
 | Entry | [cli.py](terramoo/cli.py) | argparse, printing and exit codes. The `tmoo` script is `terramoo.cli:main` ([pyproject.toml](pyproject.toml)). |
 
 Dependencies point downward only. `plan.py` imports only `model`, `moolit`
@@ -150,7 +150,7 @@ registry back with it. The next plan then sees the missing objects as
 - **Only covered by the live round trip:** `World.bootstrap`,
   `export._to_def` against real servers, and `cli` end to end
   ([tests/test_live.py](tests/test_live.py), skipped unless `TMOO_LIVE` is set).
-  The six helpers also run against the stdin/stdout LambdaMOO fake in
+  The seven helpers also run against the stdin/stdout LambdaMOO fake in
   [tests/test_helper.py](tests/test_helper.py).
 - **Platform:** `secrets.py` runs the macOS `security` CLI through
   `subprocess`. On any other OS it uses the config file.
@@ -294,6 +294,7 @@ properties in `DEFAULT_IGNORE_PROPS`.
 | [transport/telnet.py](terramoo/transport/telnet.py) | 303 | The docstring's tag table, then `program` and `_request`. `_Wire` is plain telnet plumbing and can be skipped on a first pass. |
 | [transport/mcp.py](terramoo/transport/mcp.py) | 113 | `rpc`, `eval` (the `toliteral()` wrapping and the `_TAGGED` suffix strip), and the tool fallbacks. |
 | [secrets.py](terramoo/secrets.py) | 73 | The lookup order and `check_secret`. |
+| [helper/tmoo_generation.moo](terramoo/helper/tmoo_generation.moo) | 127 | The nonce stamp on managed objects. `read` is the only check the other helpers make; `stamp`, `chparent` and `restamp` exist because a MOO hierarchy defines a property once, so a managed child of a managed parent stores its nonce as its own value of the inherited property. |
 | [helper/tmoo_info.moo](terramoo/helper/tmoo_info.moo), [tmoo_sysrefs.moo](terramoo/helper/tmoo_sysrefs.moo) | 13, 12 | Owned objects plus server version; the `$name` table. |
 
 ### Tier 3: reference only
@@ -468,7 +469,7 @@ config and no CI.
 
 1. [README.md](README.md): the whole thing, especially "Portability notes".
 2. [AGENTS.md](AGENTS.md)
-3. The header comments of the six helpers in [terramoo/helper/](terramoo/helper/)
+3. The header comments of the seven helpers in [terramoo/helper/](terramoo/helper/)
 4. [testbeds/lambdamoo/README.md](testbeds/lambdamoo/README.md),
    [testbeds/toaststunt/README.md](testbeds/toaststunt/README.md),
    [testbeds/moor/README.md](testbeds/moor/README.md)

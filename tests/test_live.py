@@ -44,6 +44,22 @@ object tmoo_test_door
 endobject
 """
 
+GENERIC = """\
+object tmoo_test_generic
+  name: "tmoo test generic"
+  parent: $thing
+
+  property kind (flags: "rc") = "generic";
+endobject
+"""
+
+CHILD = """\
+object tmoo_test_child
+  name: "tmoo test child"
+  parent: @tmoo_test_generic
+endobject
+"""
+
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
@@ -75,6 +91,85 @@ def run(capsys, *argv):
         out = capsys.readouterr()
         raise AssertionError(f"tmoo {' '.join(argv)} exited {e.code}:\n{out.out}{out.err}") from None
     return capsys.readouterr().out
+
+
+def stamp(world, obj):
+    """The object's own generation stamp as the helper reads it."""
+    return world.eval(f'{world.toolbox}:tmoo_generation("read", {obj})')
+
+
+def test_register_helper_stamps_a_parent_whose_child_is_managed(world):
+    # A hierarchy defines a property once: registering the parent after the
+    # child must take over the child's definition without losing its stamp.
+    parent = world.eval("create($thing)")
+    grandchild = Obj(-1)
+    try:
+        create = [["create", "tmoo_test_child", Obj(-1), "", parent, "child of unmanaged", "child-generation"]]
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(create)))
+        assert result[0][0] == 1
+        child = result[0][1]
+        grandchild = world.eval(f"create({child})")
+        register = [["register", "tmoo_test_generic", parent, "parent-generation"]]
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(register)))
+        assert result == [[1, parent]]
+        assert stamp(world, parent) == "parent-generation"
+        assert stamp(world, child) == "child-generation"
+        assert stamp(world, grandchild) == ""
+        assert world.eval(f'"_terramoo_generation" in properties({parent})')
+        assert not world.eval(f'"_terramoo_generation" in properties({child})')
+        # Both bindings still verify, so a mutation on each goes through.
+        ops = [
+            ["name", "tmoo_test_generic", parent, "parent-generation", "generic renamed"],
+            ["name", "tmoo_test_child", child, "child-generation", "child renamed"],
+        ]
+        result = world.eval(world.helper("tmoo_apply", world.transport.serialize(ops)))
+        assert result == [[1, 1], [1, 1]]
+    finally:
+        world.eval(f"valid({grandchild}) ? recycle({grandchild}) | 0")
+
+
+def test_managed_child_of_a_managed_parent_round_trips(world, capsys):
+    (world.objects_dir / "tmoo_test_generic.moo").write_text(GENERIC)
+    (world.objects_dir / "tmoo_test_child.moo").write_text(CHILD)
+    assert "applied" in run(capsys, "apply", "-y")
+    assert run(capsys, "plan").strip() == "no changes"
+    reg = world.read_registry()
+    generic, child = reg["tmoo_test_generic"], reg["tmoo_test_child"]
+    assert world.eval(f"parent({child})") == generic
+    assert stamp(world, generic) == reg.generations["tmoo_test_generic"]
+    assert stamp(world, child) == reg.generations["tmoo_test_child"]
+    assert stamp(world, child) != stamp(world, generic)
+
+    # The inherited stamp stays out of the child's file.
+    run(capsys, "pull")
+    assert (world.objects_dir / "tmoo_test_generic.moo").read_text() == GENERIC
+    assert (world.objects_dir / "tmoo_test_child.moo").read_text() == CHILD
+
+    # Reparenting away from the managed generic drops the inherited property;
+    # the child must keep its own stamp, and get it back when it returns.
+    thing = world.eval("$thing")
+    (world.objects_dir / "tmoo_test_child.moo").write_text(CHILD.replace("@tmoo_test_generic", "$thing"))
+    assert "chparent" in run(capsys, "plan")
+    run(capsys, "apply", "-y")
+    assert run(capsys, "plan").strip() == "no changes"
+    assert world.eval(f"parent({child})") == thing
+    assert stamp(world, child) == reg.generations["tmoo_test_child"]
+    (world.objects_dir / "tmoo_test_child.moo").write_text(CHILD)
+    run(capsys, "apply", "-y")
+    assert run(capsys, "plan").strip() == "no changes"
+    assert world.eval(f"parent({child})") == generic
+    assert stamp(world, child) == reg.generations["tmoo_test_child"]
+    assert stamp(world, generic) == reg.generations["tmoo_test_generic"]
+    assert world.read_registry() == reg
+
+    # A lost child is recreated under its managed parent.
+    world.eval(f"recycle({child})")
+    assert "is gone from the MOO" in run(capsys, "plan")
+    run(capsys, "apply", "-y")
+    assert run(capsys, "plan").strip() == "no changes"
+    new_child = world.read_registry()["tmoo_test_child"]
+    assert world.eval(f"parent({new_child})") == generic
+    assert stamp(world, new_child) == world.read_registry().generations["tmoo_test_child"]
 
 
 @pytest.mark.parametrize("key", ["tmoo_test_occupied", "TMOO_TEST_OCCUPIED"])

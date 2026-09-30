@@ -119,9 +119,9 @@ world; `override` is the one keyword of ours.
 ## How it works
 
 - `tmoo bootstrap` creates a *toolbox*, an object the player owns reached as
-  `player.tmoo`, and installs six helper verbs on it from
-  `terramoo/helper/`: `tmoo_registry`, `tmoo_callback`, `tmoo_export`,
-  `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They are plain LambdaMOO 1.8,
+  `player.tmoo`, and installs seven helper verbs on it from
+  `terramoo/helper/`: `tmoo_registry`, `tmoo_callback`, `tmoo_generation`,
+  `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs` and `tmoo_info`. They are plain LambdaMOO 1.8,
   so one copy runs on every server, and they refuse any caller but their
   owner. Re-run `tmoo bootstrap` after upgrading terramoo to install updated
   helpers.
@@ -130,7 +130,11 @@ world; `override` is the one keyword of ours.
 - The toolbox holds the *registry*, `key -> {#nnn, generation nonce}`, plus a
   registry-wide revision used to compare-and-set key renames. The
   same protected nonce is stored on the object and ignored by exports, so a
-  recycled and reused object number cannot impersonate the managed object. It
+  recycled and reused object number cannot impersonate the managed object.
+  A hierarchy defines a property once, so a managed child of a managed
+  parent holds its nonce as its own value of the inherited property;
+  `tmoo_generation` keeps every stamp intact across registering a parent
+  after its children, reparenting, and recycling a parent. It
   lives in the MOO, so a
   rollback rolls it back too; `worlds/<world>/state.json` is a local copy.
 - `plan` diffs the files against the live objects. A `@ref` to a key with no
