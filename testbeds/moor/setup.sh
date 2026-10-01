@@ -14,7 +14,9 @@ MOOR_COMMIT=7caba6e5d850f33f155f842c311dbae328367af8
 SRC=$HERE/.build/moor
 RUN=$HERE/.run
 PROFILE=release-fast   # mooR's own release profile for dev/quick-start builds
-BIN=$SRC/target/$PROFILE/moor-daemon
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"   # builds are per platform: the tree may be synced between machines
+export CARGO_TARGET_DIR=$HERE/.build/target-$PLATFORM
+BIN=$CARGO_TARGET_DIR/$PROFILE/moor-daemon
 
 if [ "${1:-}" = "--reset" ]; then
   "$HERE/stop.sh" >/dev/null || true
@@ -32,11 +34,11 @@ if [ "$(git -C "$SRC" rev-parse HEAD)" != "$MOOR_COMMIT" ]; then
 fi
 
 # 2. binaries (cargo is itself incremental; the stamp skips even that)
-STAMP=$HERE/.build/built-$MOOR_COMMIT
+STAMP=$HERE/.build/built-$MOOR_COMMIT-$PLATFORM
 if [ ! -x "$BIN" ] || [ ! -f "$STAMP" ]; then
   echo "building mooR $MOOR_COMMIT ($PROFILE); this takes a while..."
   (cd "$SRC" && cargo build --profile "$PROFILE" -p moor-daemon -p moor-telnet-host -p moor-web-host)
-  rm -f "$HERE"/.build/built-*; touch "$STAMP"
+  rm -f "$HERE"/.build/built-*-"$PLATFORM"; touch "$STAMP"
 fi
 
 # 3. world: import lambda-moor on first start, then add the test logins

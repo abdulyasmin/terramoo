@@ -119,6 +119,10 @@ class _Wire:
                 return None
             except ssl.SSLWantReadError:
                 continue
+            except (ConnectionResetError, ConnectionAbortedError):
+                # Linux answers a close with unread input by resetting the
+                # connection, where macOS delivers a plain end of stream.
+                chunk = b""
             if not chunk:
                 raise MooError("the MOO closed the connection")
             self._feed(chunk)

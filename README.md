@@ -197,8 +197,10 @@ A rollback must restore the pre-upgrade database and world files together.
 and both transports against fakes.
 
 `testbeds/{lambdamoo,toaststunt,moor}/` each hold a `setup.sh` that builds
-that server from source on macOS with no Docker, plus `start.sh` and
-`stop.sh`. They listen on 127.0.0.1:17002, 17001 and 17003, each with a
+that server from source on macOS or Linux with no Docker, plus `start.sh`
+and `stop.sh`. Builds land in `.build/<os>-<arch>/`, so a checkout synced
+between machines keeps one build per platform; the working databases in
+`.run/` are shared. They listen on 127.0.0.1:17002, 17001 and 17003, each with a
 non-wizard programmer `tester`/`tester`. The live round trip creates,
 edits, pulls, recycles and recreates objects, then leaves nothing behind:
 
