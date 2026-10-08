@@ -40,7 +40,7 @@ elseif (mode == "begin" || mode == "import")
     keys = {@keys, entry[1]};
     i = entry[1] in reg[1];
     if (i && valid(reg[2][i]))
-      if (reg[3][i] != entry[2] || !("_terramoo_generation" in properties(reg[2][i])) || reg[2][i].("_terramoo_generation") != entry[2])
+      if (reg[3][i] != entry[2] || this:tmoo_generation("read", reg[2][i]) != entry[2])
         raise(E_INVARG, tostr("package generation changed: ", entry[1]));
       endif
     endif

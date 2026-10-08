@@ -1019,7 +1019,7 @@ shared exact dependencies; retained snapshots; editable installations and
 three-way conflict candidates; identity-preserving import; key, namespace,
 source-key, and instance migrations; guarded pull; scoped removal; and recovery.
 
-Persistent formats use schema version 1. Helper version 12 adds an ownership
+Persistent formats use schema version 1. Helper version 13 adds an ownership
 epoch checked alongside registry generations. Per-object receipts distinguish
 pending desired revisions from completed deployment. Source snapshots remain
 immutable; identity migrations transform compiled baselines and world bindings.
@@ -1033,8 +1033,8 @@ Implementation files and recovery protocols are documented in
 
 Verification completed on 2026-10-09:
 
-- Full offline suite: **397 passed, 10 live tests skipped**.
-- Full live suite: **10 passed** on each of LambdaMOO 1.8.1, ToastStunt,
+- Full offline suite: **397 passed, 12 live tests skipped**.
+- Live suite: **all 12 tests passed** on each of LambdaMOO 1.8.1, ToastStunt,
   and mooR. Testbeds ran sequentially and were stopped afterward.
 - Expanded lifecycle tests were rerun after the final fixes on all three:
   lost import, create, rename, and deletion responses; independent instances;
@@ -1054,5 +1054,11 @@ removals without an explicit migration or replacement choice; and correcting
 case-only filesystem transactions. The remaining limits are the accepted
 local-source/exact-version scope and dependencies hidden in literal MOO code,
 callbacks, or unmanaged objects, as described in the README and REVIEW.
+
+Sync integration included upstream generation-stamp and testbed portability
+fixes. Package ownership uses the shared generation reader so managed children
+can retain their own stamp in an inherited property. The package lifecycle test
+now covers parent/child objects through independent installation, update,
+interrupted removal, and reinstall. Helper version 13 requires a fresh bootstrap.
 
 No real-world deployment was performed.

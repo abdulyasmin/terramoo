@@ -6,6 +6,7 @@ directory; never start or modify a running testbed or download missing sources.
 
 import gzip
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -89,7 +90,7 @@ quit
 @pytest.fixture(scope="module")
 def offline_moo(tmp_path_factory):
     build = ROOT / "testbeds/lambdamoo/.build"
-    source = build / "MOO-1.8.1"
+    source = build / f"{platform.system().lower()}-{platform.machine()}" / "MOO-1.8.1"
     core = build / "LambdaCore-17May04.db.gz"
     if not (source / "Makefile").exists() or not core.exists():
         pytest.skip("requires the locally built LambdaMOO testbed sources")

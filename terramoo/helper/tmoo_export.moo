@@ -35,7 +35,7 @@ for binding in (bindings)
   if (!nonce)
     raise(E_INVARG, tostr(key, ": unverified legacy binding; confirm it with tmoo adopt ", o, " ", key, " --verify"));
   endif
-  if (!("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+  if (this:tmoo_generation("read", o) != nonce)
     raise(E_INVARG, tostr(key, ": object generation does not match the registry"));
   endif
   props = {};

@@ -26,7 +26,12 @@ editable instances in a world.
 | [ownership.py](terramoo/ownership.py), [helper/tmoo_packages.moo](terramoo/helper/tmoo_packages.moo) | Deployment epochs, per-key ownership, durable intents, receipts, and recovery. Read these together. |
 | [removal.py](terramoo/removal.py), [imports.py](terramoo/imports.py), [migrations.py](terramoo/migrations.py) | Historical membership, checked teardown, existing-object claims, and resumable identity migrations. |
 | [storage.py](terramoo/storage.py), [views.py](terramoo/views.py), [cli.py](terramoo/cli.py) | Local write transactions, guarded exports, status, world locks, command dispatch, and legacy rename recovery. |
-| [export.py](terramoo/export.py), [transport/](terramoo/transport/), [helper/](terramoo/helper/) | Live object decoding, telnet and MCP transport behavior, and seven plain LambdaMOO 1.8 helper verbs. |
+| [export.py](terramoo/export.py), [transport/](terramoo/transport/), [helper/](terramoo/helper/) | Live object decoding, telnet and MCP transport behavior, and eight plain LambdaMOO 1.8 helper verbs. |
+
+Generation stamps are managed by [tmoo_generation.moo](terramoo/helper/tmoo_generation.moo).
+A managed child stores its own nonce in an inherited property. The helper
+preserves these values when registering ancestors, reparenting, or recycling
+a parent; package ownership checks use the same generation reader.
 
 ## Execution
 
@@ -91,7 +96,7 @@ plan/apply path, with recursive discovery and generation checks.
 
 The registry is `{keys, objects, generations, revision}`. Protected registry
 state and a separate revision detect stale or callback-replaced bindings.
-Helper version 12 adds package ownership state:
+Helper version 13 adds package ownership state:
 
 ```text
 {1, world_id, epoch, {{key, generation, installation_id, desired}, ...}}

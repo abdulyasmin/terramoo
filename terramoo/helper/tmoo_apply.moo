@@ -70,7 +70,7 @@ for op in (ops)
           raise(E_INVARG, tostr("key ", key, " changed before create"));
         endif
         if (valid(expected))
-          if (!expected_nonce || !("_terramoo_generation" in properties(expected)) || expected.("_terramoo_generation") != expected_nonce)
+          if (!expected_nonce || this:tmoo_generation("read", expected) != expected_nonce)
             raise(E_INVARG, tostr("key ", key, " names a different object generation"));
           endif
           raise(E_INVARG, tostr("key ", key, " is no longer gone"));
@@ -102,7 +102,7 @@ for op in (ops)
         raise(E_INVARG, tostr("key ", key, " changed during create"));
       endif
       r.name = op[6];
-      add_property(r, "_terramoo_generation", op[7], {this.owner, "r"});
+      this:tmoo_generation("stamp", r, op[7]);
       if (i)
         reg[2][i] = r;
         reg[3][i] = op[7];
@@ -130,12 +130,7 @@ for op in (ops)
       if (j && j != i)
         raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j]));
       endif
-      if ("_terramoo_generation" in properties(r))
-        r.("_terramoo_generation") = nonce;
-        set_property_info(r, "_terramoo_generation", {this.owner, "r"});
-      else
-        add_property(r, "_terramoo_generation", nonce, {this.owner, "r"});
-      endif
+      this:tmoo_generation("stamp", r, nonce);
       if (i)
         reg[2][i] = r;
         reg[3][i] = nonce;
@@ -161,7 +156,7 @@ for op in (ops)
         raise(E_INVARG, "registry binding changed before rename");
       endif
       old_key = reg[1][i];
-      if (nonce && valid(o) && (!("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce))
+      if (nonce && valid(o) && this:tmoo_generation("read", o) != nonce)
         raise(E_INVARG, tostr("key ", old_key, " names a different object generation"));
       endif
       j = new_key in reg[1];
@@ -202,10 +197,13 @@ for op in (ops)
           raise(E_INVARG, tostr("key ", key, " has an unverified legacy binding"));
         endif
         if (valid(o))
-          if (!("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+          if (this:tmoo_generation("read", o) != nonce)
             raise(E_INVARG, tostr("key ", key, " names a different object generation"));
           endif
+          "Recycling a defining ancestor drops the property from the managed objects below it.";
+          managed = this:tmoo_generation("managed", o);
           recycle(o);
+          this:tmoo_generation("restamp", managed);
         endif
         if (valid(o))
           raise(E_INVARG, tostr("object ", o, " is still valid after recycle"));
@@ -242,7 +240,7 @@ for op in (ops)
         nonce = binding[3];
         reg = this.registry;
         i = key in reg[1];
-        if (!i || reg[2][i] != o || reg[3][i] != nonce || !nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+        if (!i || reg[2][i] != o || reg[3][i] != nonce || !nonce || !valid(o) || this:tmoo_generation("read", o) != nonce)
           raise(E_INVARG, tostr("key ", key, " changed before link"));
         endif
         is_exit = 0;
@@ -263,7 +261,7 @@ for op in (ops)
           endif
           reg = this.registry;
           i = key in reg[1];
-          if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+          if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || this:tmoo_generation("read", o) != nonce)
             raise(E_INVARG, tostr("key ", key, " changed during link"));
           endif
           if (valid(dst) && !(o in `dst.entrances ! ANY => {}'))
@@ -281,13 +279,13 @@ for op in (ops)
       o = op[3];
       nonce = op[4];
       i = key in reg[1];
-      if (!i || reg[2][i] != o || reg[3][i] != nonce || !nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+      if (!i || reg[2][i] != o || reg[3][i] != nonce || !nonce || !valid(o) || this:tmoo_generation("read", o) != nonce)
         raise(E_INVARG, tostr("key ", key, " changed before ", kind));
       endif
       if (kind == "name")
         o.name = op[5];
       elseif (kind == "chparent")
-        chparent(o, op[5]);
+        this:tmoo_generation("chparent", o, op[5]);
       elseif (kind == "move")
         move(o, op[5]);
       elseif (kind == "flags")
@@ -361,7 +359,7 @@ for op in (ops)
               "The callback may have suspended: recheck identity and the CAS value.";
               reg = this.registry;
               i = key in reg[1];
-              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || this:tmoo_generation("read", o) != nonce)
                 raise(E_INVARG, tostr("key ", key, " changed during endpoint update"));
               endif
               if (o.(prop) != new)
@@ -387,7 +385,7 @@ for op in (ops)
               "The callback may have suspended: recheck identity and the new value.";
               reg = this.registry;
               i = key in reg[1];
-              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || !("_terramoo_generation" in properties(o)) || o.("_terramoo_generation") != nonce)
+              if (!i || reg[2][i] != o || reg[3][i] != nonce || !valid(o) || this:tmoo_generation("read", o) != nonce)
                 raise(E_INVARG, tostr("key ", key, " changed during endpoint update"));
               endif
               if (o.(prop) != new)

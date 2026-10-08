@@ -5,11 +5,13 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"   # builds are per platform: the tree may be synced between machines
+MOO="$HERE/.build/$PLATFORM/moo"
 RUN="$HERE/.run"
 PORT="${MOO_PORT:-17001}"
 PID="$RUN/moo.pid"
 
-[[ -x "$HERE/.build/moo" && -f "$RUN/base.db" ]] || { echo "run ./setup.sh first" >&2; exit 1; }
+[[ -x "$MOO" && -f "$RUN/base.db" ]] || { echo "no $MOO or $RUN/base.db; run ./setup.sh first" >&2; exit 1; }
 
 if [[ -f "$PID" ]] && kill -0 "$(cat "$PID")" 2>/dev/null; then
   echo "already running (pid $(cat "$PID"))"; exit 0
@@ -24,7 +26,7 @@ fi
 [[ -f "$RUN/moo.db" ]] || cp "$RUN/base.db" "$RUN/moo.db"
 
 cd "$RUN"
-nohup "$HERE/.build/moo" -l "$RUN/moo.log" -O -4 127.0.0.1 --no-ipv6 -p "$PORT" \
+nohup "$MOO" -l "$RUN/moo.log" -O -4 127.0.0.1 --no-ipv6 -p "$PORT" \
     moo.db moo.db.new < /dev/null > /dev/null 2>&1 &
 echo $! > "$PID"
 

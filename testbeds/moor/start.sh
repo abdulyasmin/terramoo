@@ -5,7 +5,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 RUN=$HERE/.run
-BIN=$HERE/.build/moor/target/release-fast
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"   # builds are per platform: the tree may be synced between machines
+BIN=$HERE/.build/target-$PLATFORM/release-fast
 CORE=$HERE/.build/moor/cores/lambda-moor/src
 IPC=ipc://$RUN/ipc
 

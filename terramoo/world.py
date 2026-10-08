@@ -27,6 +27,7 @@ HELPER_DIR = Path(__file__).parent / "helper"
 HELPER_VERBS = (
     "tmoo_registry",
     "tmoo_callback",
+    "tmoo_generation",
     "tmoo_export",
     "tmoo_apply",
     "tmoo_sysrefs",
@@ -37,7 +38,7 @@ SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 12
+HELPER_VERSION = 13
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 REGISTRY_STATE_PROP = "_terramoo_registry_state"
 REGISTRY_REVISION_PROP = "_terramoo_registry_revision"
