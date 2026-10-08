@@ -946,7 +946,7 @@ def test_adopt_verify_preserves_local_edits_but_plain_adopt_rewrites(
     assert objdef.parse(path.read_text()).name == "Live hall"
     assert "local definition kept" not in capsys.readouterr().out
 
-    path.rename(files.file_for(file_key))
+    path.rename(path.with_name(f"{file_key}.moo"))
     path = files.file_for(file_key)
     desired = objdef.render(ObjectDef(key=file_key, name="Unapplied local edit", parent=Obj(2)))
     desired_bytes = desired.replace("\n", "\r\n").encode()

@@ -1,0 +1,8 @@
+schema_version = 1
+name = "town"
+version = "1.0.0"
+modules = ["core", "rooms"]
+
+[inputs.entry_room]
+type = "object"
+default = "#-1"

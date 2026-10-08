@@ -46,6 +46,14 @@ for op in (ops)
     if (reg_length < 4 || registry_revision != revision)
       this.registry = reg;
     endif
+    package_token = "";
+    if (op[1] == "owned")
+      package_token = op[2];
+      op = op[3];
+    endif
+    if (package_token || "_terramoo_package_state" in properties(this))
+      this:tmoo_packages("check", package_token, op);
+    endif
     kind = op[1];
     r = 1;
     if (kind == "create")
@@ -82,6 +90,9 @@ for op in (ops)
       "create() may run an :initialize verb that changes the registry.";
       reg = this:tmoo_registry("reconcile", before);
       revision = reg[4];
+      if (package_token)
+        this:tmoo_packages("check", package_token, op);
+      endif
       j = r in reg[2];
       if (j && reg[1][j] != key)
         raise(E_INVARG, tostr("object ", r, " is already registered as ", reg[1][j], "; cannot bind key ", key));
@@ -168,6 +179,15 @@ for op in (ops)
       endif
       this.registry = reg;
       r = o;
+      if ("_terramoo_package_state" in properties(this))
+        package_state = this._terramoo_package_state;
+        for pi in [1..length(package_state[4])]
+          if (package_state[4][pi][1] == old_key)
+            package_state[4][pi][1] = new_key;
+          endif
+        endfor
+        this._terramoo_package_state = package_state;
+      endif
     elseif (kind == "destroy")
       key = op[2];
       o = op[3];
@@ -193,6 +213,9 @@ for op in (ops)
         ":recycle may register objects, remove keys or replace this binding.";
         reg = this:tmoo_registry("reconcile", before);
         revision = reg[4];
+      if (package_token || "_terramoo_package_state" in properties(this))
+        this:tmoo_packages("check", package_token, op);
+      endif
         i = key in reg[1];
       endif
       if (i)
@@ -504,6 +527,9 @@ for op in (ops)
       else
         raise(E_INVARG, tostr("unknown op ", kind));
       endif
+    endif
+    if (package_token || "_terramoo_package_state" in properties(this))
+      this:tmoo_packages("check", package_token, op);
     endif
     out = {@out, {1, r}};
   except e (ANY)

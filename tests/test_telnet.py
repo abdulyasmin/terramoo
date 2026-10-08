@@ -231,7 +231,9 @@ def test_connection_close_mid_request_is_reported_without_retry(monkeypatch):
     fake = FakeMoo(reply)
     t = client(monkeypatch, fake)
 
-    with pytest.raises(MooError, match="the MOO closed the connection"):
+    # The peer may close before the sentinel write or while we read its reply.
+    # Either path must report an uncertain outcome without retrying the call.
+    with pytest.raises(MooError, match="the MOO closed the connection|request was not retried"):
         t.eval("potentially_destructive_call()")
     assert sum("potentially_destructive_call()" in line for line in fake.received) == 1
 

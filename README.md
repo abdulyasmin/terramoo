@@ -1,6 +1,6 @@
 # terramoo
 
-A MOO player's objects as files, on any MOO. `worlds/<world>/objects/*.moo`
+A MOO player's objects as files, on any MOO. `worlds/<world>/objects/**/*.moo`
 is the source of truth for what one player owns: `tmoo apply` makes the MOO
 match the files, and `tmoo pull` brings live edits back. Everything runs as
 that player, who must be a programmer but needn't be a wizard.
@@ -30,6 +30,10 @@ interrupted or uncertain rename preserves
 world's `objects/` directory while recovery runs. File-writing commands use
 `worlds/<world>/.cache/write.lock`; another such command for that world fails
 rather than waiting.
+
+Worlds using modules or packages recover key migrations with
+`tmoo package recover`. The command also recovers interrupted installation,
+import, deployment, and removal transactions.
 
 Install with `uv tool install git+<this repo's URL>`, or add it as a
 dependency of a repo that holds your worlds. `tmoo` uses the nearest
@@ -70,6 +74,223 @@ keep_props = []         # re-enable an exclusion (names are case-insensitive)
 The secret (a password, or an MCP token) is read from `$TMOO_SECRET`, the
 macOS Keychain (service `terramoo`, account = the world name), or
 `~/.config/terramoo/<world>.secret`. It never goes in a world file.
+
+## Folders and modules
+
+Object files can be nested to any depth. Their filename and `object` header
+remain their identity, so moving a file between ordinary folders does not
+rename its live object. Keys must be unique throughout a world, including
+case differences. Symlinked files and directories are refused.
+
+A `module.toml` groups the files below it, stopping at any nested module
+manifest. For example, `objects/local/rooms/module.toml` can contain:
+
+```toml
+schema_version = 1
+name = "rooms"
+references = ["local/arrival"]
+depends_on = ["local/core"]
+```
+
+Standalone modules have addresses such as `local/rooms`; bare `rooms` means
+the same thing in standalone manifests and command selectors. Package module
+addresses use their instance name, such as `north_town/rooms`.
+
+Declare every cross-module structured reference directly. `references`
+permits ordinary references and cycles. `depends_on` also requires that the
+provider finish applying before the consumer starts, including initialization.
+Parent cycles and contradictory initialization dependencies fail validation.
+Files without a manifest remain ungrouped. Give an ungrouped provider a module
+before referencing it from a named module.
+
+```sh
+tmoo check                             # offline file and module validation
+tmoo modules                           # offline membership and dependencies
+tmoo plan --module rooms
+tmoo apply --module rooms -y
+tmoo status --module rooms
+tmoo diff --module rooms --with-deps
+tmoo pull --module rooms
+tmoo pull hall --into local/rooms       # destination for a missing standalone file
+```
+
+Repeat `--module` and `--package` to select a union. Plan and apply include
+reference and initialization dependencies and display the resulting scope.
+Status, diff, pull, and export include dependencies only with `--with-deps`.
+Removal is limited to explicitly selected scopes; adding dependencies to an
+apply does not authorize removing their objects. With no selectors, commands
+operate on the whole world.
+
+## Package instances
+
+A package is a local directory with `package.toml`, module manifests, and
+portable object definitions. It can be installed zero or more times in each
+world. Each named instance has its own namespace, source snapshot, bindings,
+editable files, and deployment history. See [the town example](examples/packages/town/package.toml).
+
+```sh
+tmoo package check examples/packages/town
+tmoo package install examples/packages/town --as north_town
+tmoo package install examples/packages/town --as south_town
+tmoo plan --package north_town
+tmoo apply --package north_town -y
+```
+
+Install prepares files locally; apply creates or changes live objects. The
+example creates keys such as `north_town__square` and `south_town__square`.
+`--namespace NAME` overrides the default prefix. Installation refuses local
+collisions; plan and apply also reject occupied live keys without a matching
+installation receipt. Use import to claim existing objects explicitly.
+
+```toml
+# package.toml in a reusable source directory
+schema_version = 1
+name = "town"
+version = "1.0.0"
+modules = ["core", "rooms"]
+
+[inputs.entry_room]
+type = "object"
+required = true
+```
+
+List every module root. Source objects use package-local `@keys`; compilation
+rewrites parsed references and headers for each instance. Strings and verb
+code stay literal. Positive object numbers and UUID objects in structured
+source values are refused. Use object inputs bound to managed `@keys`, `$names`,
+`@me`, `#0`, or negative sentinels. A consuming module declares
+`uses_inputs = ["entry_room"]`; add `depends_on_inputs` when initialization
+needs the provider to be fully applied.
+
+Pass bindings as `--bind 'entry_room=@arrival'` or edit the instance's
+`bindings` table in `world.toml` and run `package update INSTANCE`. Bindings
+add module references only for modules that consume them.
+
+Package dependency aliases specify an exact package name and version:
+
+```toml
+# in the consumer's package.toml
+[dependencies.kit]
+package = "kit"
+version = "1.0.0"
+# digest = "..."  # optional required SHA-256 content digest
+```
+
+```toml
+# in worlds/example/world.toml
+[packages.shared_kit]
+source = "../../../packages/kit"
+
+[packages.north_town]
+source = "../../../packages/town"
+
+[packages.north_town.dependencies]
+kit = "shared_kit"
+```
+
+Source paths in world configuration are relative to that world's directory.
+Consumer modules refer to a dependency module as `kit/base`. Installing the
+consumer prepares its configured dependency closure. Sharing requires an
+explicit provider instance; no dependency instance is created implicitly.
+Versions and content digests are pinned. An incompatible shared-provider
+upgrade requires updating compatible consumers together or selecting another
+provider instance.
+
+### Edit, update, and remove
+
+Installed files live under `objects/packages/INSTANCE/`, retaining the source
+module paths. Edit them as ordinary world files. Their pinned source and
+upgrade baselines remain separate under `.packages/` and in
+`packages.lock.json`. Normal checks and deployments do not reread the source
+directory. Retain these files, deployment receipts, and `world.toml` when
+moving or backing up a world; `state.json` alone cannot establish ownership.
+
+```sh
+tmoo package update north_town                  # stage current source and bindings
+tmoo package update shared_kit north_town south_town
+tmoo package update north_town --resume         # after editing a conflict candidate
+tmoo package update north_town --abort          # discard only an uncommitted candidate
+tmoo apply --package north_town -y
+tmoo pull --package north_town
+tmoo package remove north_town                  # stage removal; no live recycling
+tmoo plan --package north_town --destroy
+tmoo apply --package north_town --destroy       # asks before recycling
+```
+
+Updates compare previous compiled source, edited installation, and new compiled
+source at file granularity. Independent local edits are retained. Conflicts
+leave active files untouched and write a candidate under `.packages/candidates/`.
+Edit its files, remove the conflict markers, then resume; delete a candidate
+file to choose removal. Changes to active files invalidate the candidate.
+
+Pull refuses selected package objects whose desired revision is pending or
+only partly applied. Missing files are restored at recorded paths. Exported
+references that need new module declarations are reported and must be fixed
+before applying. Pull never changes source snapshots or upgrade baselines.
+
+Removal with local edits requires `package remove --yes`, which archives those
+edits. Live teardown checks ownership, generations, and references from surviving
+managed objects. Consumers are removed before providers. A failed deletion
+stops later deletions and retains the remaining records for recovery. After
+completed removal, the same instance name can be installed again with a new
+installation identity; the previous history is archived.
+
+### Import and migrate identities
+
+Import requires an existing managed local definition and a verified registry
+binding for every source object. Its mapping file is explicit:
+
+```toml
+schema_version = 1
+[objects]
+town_room = "my_room_class"
+square = "existing_square"
+inn = "existing_inn"
+```
+
+```sh
+tmoo package import examples/packages/town --as north_town --mapping import.toml
+tmoo plan --package north_town
+tmoo rename-key existing_square grand_square
+tmoo package migrate north_town --namespace northern
+tmoo package rename north_town northern_town
+```
+
+Import preserves live objects and local definitions, updates module membership,
+and records the source-to-world key overrides. Key and namespace migrations
+preserve object identities while updating mappings, parsed references, input
+bindings, and comparison baselines. An instance rename changes its address and
+directories while preserving its namespace and keys.
+
+For an upstream source-key rename, first change the source, then supply a TOML
+mapping with `schema_version = 1` and `[objects] old_key = "new_key"`:
+
+```sh
+tmoo package migrate northern_town --source-keys source-renames.toml
+```
+
+This stages a three-way update that retains installed keys. Use the usual
+update resume/abort commands if it conflicts. Namespace and registry-key
+migrations keep a durable remote-operation journal; after interruption, use
+`tmoo package recover` before another mutation. Recovery verifies the recorded
+generations and deployment token. A stale checkout cannot authorize mutations
+of another checkout's package objects.
+
+An update that both adds and removes source keys requires an explicit choice:
+provide a source-key migration, or use `package update --allow-replacements`
+to accept distinct objects. The latter leaves recycling behind the usual
+reviewed `apply --destroy` step.
+
+Package sources are local directories in this release. There is no registry,
+remote download protocol, version-range solver, or automatic rewriting of MOO
+verb code. Dynamic references and callback behavior still require explicit
+module declarations from the author.
+
+Upgrade all clients for a world together and run `tmoo bootstrap` to install
+helper version 12. Older flat-only clients do not understand nested files or
+package ownership; a new world-format marker cannot make them safe. Downgrading
+requires a validated export/flattening procedure or a matching world and
+database backup.
 
 ## The file format
 
@@ -189,14 +410,17 @@ A rollback must restore the pre-upgrade database and world files together.
 
 ## Testbeds and tests
 
-`uv run pytest` runs the offline tests: the format, the literals, the plan,
-and both transports against fakes.
+`uv run pytest` runs the offline tests: formats, modules, packages, planning,
+transactions, recovery, and both transports against fakes. Helper tests compile
+and run the MOO verbs in a local LambdaMOO subprocess.
 
 `testbeds/{lambdamoo,toaststunt,moor}/` each hold a `setup.sh` that builds
 that server from source on macOS with no Docker, plus `start.sh` and
 `stop.sh`. They listen on 127.0.0.1:17002, 17001 and 17003, each with a
 non-wizard programmer `tester`/`tester`. The live round trip creates,
-edits, pulls, recycles and recreates objects, then leaves nothing behind:
+edits, pulls, recycles and recreates objects. It also covers package isolation,
+imports, migrations, interrupted operations, and reciprocal modules, then
+removes the test objects:
 
 ```
 testbeds/toaststunt/setup.sh && testbeds/toaststunt/start.sh --fresh
@@ -212,4 +436,4 @@ reading order and the traps.
 
 ## License
 
-GNU Affero General Public License v3.0 or later; see `LICENSE`.
+AGPL-3.0-or-later; see [LICENSE](LICENSE).

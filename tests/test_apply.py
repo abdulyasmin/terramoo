@@ -508,6 +508,21 @@ def test_ops_are_split_before_the_configured_batch_limit():
     assert w.batches == [[first], [second]]
 
 
+def test_scoped_post_create_replan_keeps_live_ancestry_outside_group(monkeypatch):
+    from copy import deepcopy
+    from terramoo import export
+    refs = Refs(ME, Registry({"parent": Obj(200), "door": Obj(201)}, {"parent": "a", "door": "b"}), {"exit": Obj(7)})
+    parent = ObjectDef("parent", "Exit class", Ref("$", "exit"))
+    desired = ObjectDef("door", "Door", Ref("@", "parent"), props=[PropDef("source", Obj(11), defined=False)])
+    current = deepcopy(desired)
+    current.props[0].value = Obj(10)
+    live = {"parent": parent, "door": current}
+    monkeypatch.setattr(export, "export", lambda w, r, keys: {k: live[k] for k in keys})
+    ops = apply._replan_created(None, [], ["door"], {"parent": parent, "door": desired}, refs, full_context=True)
+    endpoint = next(op for op in ops if op[0] == "endpoint")
+    assert endpoint[2:6] == ("source", Obj(10), Obj(11), 1)
+
+
 def test_verb_name_is_logged_while_numeric_descriptor_is_sent_to_helper():
     hall = Obj(200)
     w = FakeWorld()

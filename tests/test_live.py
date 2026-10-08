@@ -11,6 +11,7 @@ import os
 import pytest
 
 from terramoo import cli
+from terramoo.catalog import discover
 from terramoo.moolit import Obj
 from terramoo.world import World
 
@@ -61,8 +62,23 @@ def world(tmp_path, monkeypatch):
         w.close()
         pytest.skip(f"this player's registry manages real objects ({', '.join(others[:5])}); use a scratch account")
     yield w
-    for f in w.objects_dir.glob("tmoo_test_*.moo"):
-        f.unlink()
+    if (w.dir / ".packages/operation.json").exists():
+        cli.main(["package", "recover"])
+    if (w.dir / "packages.lock.json").exists():
+        from terramoo.installation import Store
+        from terramoo.updates import remove
+        store = Store(w)
+        active = [n for n, r in store.instances.items() if r["state"] == "prepared"]
+        roots = [w.objects_dir / "packages" / n for n in active]
+        tree = discover(w.objects_dir)
+        for f in (*tree.objects, *tree.manifests):
+            if not any(f.is_relative_to(root) for root in roots):
+                f.unlink()
+        if active:
+            remove(Store(w), active, allow_modified=True)
+    for f in discover(w.objects_dir).objects:
+        if f.stem.startswith("tmoo_test_"):
+            f.unlink()
     cli.main(["apply", "--destroy", "-y"])
     w.close()
 
@@ -75,6 +91,189 @@ def run(capsys, *argv):
         out = capsys.readouterr()
         raise AssertionError(f"tmoo {' '.join(argv)} exited {e.code}:\n{out.out}{out.err}") from None
     return capsys.readouterr().out
+
+
+def test_package_instances_update_and_remove_independently(world, tmp_path, capsys, monkeypatch):
+    from types import SimpleNamespace
+    from terramoo.deployment import prepare
+    from terramoo.errors import MooError
+    from terramoo.ownership import recover
+    from terramoo.storage import toml_text
+    source = tmp_path / "package"
+    module = source / "rooms"
+    module.mkdir(parents=True)
+    (source / "package.toml").write_text(toml_text({"schema_version": 1, "name": "fixture", "version": "1.0.0", "modules": ["rooms"]}))
+    (module / "module.toml").write_text('schema_version = 1\nname = "rooms"\n')
+    definition = 'object item\n  name: "Original"\n  parent: $thing\nendobject\n'
+    (module / "item.moo").write_text(definition)
+    for instance in ("tmoo_test_north", "tmoo_test_south"):
+        run(capsys, "package", "install", str(source), "--as", instance)
+        run(capsys, "apply", "--package", instance, "-y")
+    before = world.read_registry()
+    assert before["tmoo_test_north__item"] != before["tmoo_test_south__item"]
+    assert "no changes" in run(capsys, "plan")
+    (module / "item.moo").write_text(definition.replace('"Original"', '"Updated"'))
+    run(capsys, "package", "update", "tmoo_test_north")
+    run(capsys, "apply", "--package", "tmoo_test_north", "-y")
+    assert world.eval(f'{before["tmoo_test_north__item"]}.name') == "Updated"
+    assert world.eval(f'{before["tmoo_test_south__item"]}.name') == "Original"
+    run(capsys, "package", "remove", "tmoo_test_north", "-y")
+    proposal = prepare(world, SimpleNamespace(module=[], package=["tmoo_test_north"]))
+    original_eval = world.eval
+    dropped = False
+
+    def lose_response(expression):
+        nonlocal dropped
+        result = original_eval(expression)
+        if '"destroy"' in expression and not dropped:
+            dropped = True
+            raise MooError("injected lost deletion response")
+        return result
+
+    monkeypatch.setattr(world, "eval", lose_response)
+    with pytest.raises(MooError, match="lost deletion response"):
+        proposal.run(destroy=True)
+    monkeypatch.setattr(world, "eval", original_eval)
+    recover(world)
+    run(capsys, "apply", "--package", "tmoo_test_north", "--destroy", "-y")
+    after = world.read_registry()
+    assert "tmoo_test_north__item" not in after
+    assert after["tmoo_test_south__item"] == before["tmoo_test_south__item"]
+    assert "no changes" in run(capsys, "plan", "--package", "tmoo_test_south")
+    run(capsys, "package", "install", str(source), "--as", "tmoo_test_north")
+    run(capsys, "apply", "--package", "tmoo_test_north", "-y")
+    replaced = world.read_registry()
+    assert replaced.generations["tmoo_test_north__item"] != before.generations["tmoo_test_north__item"]
+    assert replaced["tmoo_test_south__item"] == before["tmoo_test_south__item"]
+    run(capsys, "package", "rename", "tmoo_test_south", "tmoo_test_east")
+    assert "no changes" in run(capsys, "plan", "--package", "tmoo_test_east")
+
+
+def test_import_migrate_and_guard_pending_pull(world, tmp_path, capsys, monkeypatch):
+    from terramoo.errors import MooError
+    from terramoo.installation import Store
+    from terramoo import imports, migrations
+    from terramoo.ownership import recover
+    from terramoo.storage import toml_text
+    source = tmp_path / "source"
+    module = source / "rooms"
+    module.mkdir(parents=True)
+    (source / "package.toml").write_text(toml_text({"schema_version": 1, "name": "fixture", "version": "1", "modules": ["rooms"]}))
+    (module / "module.toml").write_text('schema_version = 1\nname = "rooms"\n')
+    text = 'object item\n  name: "Imported"\n  parent: $thing\nendobject\n'
+    (module / "item.moo").write_text(text)
+    directory = world.objects_dir / "legacy"
+    directory.mkdir()
+    (directory / "module.toml").write_text('schema_version = 1\nname = "legacy"\n')
+    existing = directory / "tmoo_test_existing.moo"
+    existing.write_text(text.replace("object item", "object tmoo_test_existing"))
+    run(capsys, "apply", "-y")
+    original = world.read_registry()["tmoo_test_existing"]
+    mapping = tmp_path / "mapping.toml"
+    mapping.write_text('schema_version = 1\n[objects]\nitem = "tmoo_test_existing"\n')
+    store = Store(world)
+    proposed, mapping_values = imports.prepare(store, source, "tmoo_test_imported", mapping)
+    original_eval = world.eval
+
+    def lose_import_response(expression):
+        result = original_eval(expression)
+        if 'tmoo_packages("import"' in expression:
+            raise MooError("injected lost import response")
+        return result
+
+    monkeypatch.setattr(world, "eval", lose_import_response)
+    with pytest.raises(MooError, match="lost import response"):
+        imports.execute(store, proposed, mapping_values)
+    monkeypatch.setattr(world, "eval", original_eval)
+    recover(world)
+    assert world.read_registry()["tmoo_test_existing"] == original
+    assert not existing.exists()
+    run(capsys, "apply", "--package", "tmoo_test_imported", "-y")
+    store = Store(world)
+    proposal = migrations.prepare(store, {"tmoo_test_existing": "tmoo_test_renamed"})
+    original_eval = world.eval
+    dropped = False
+
+    def lose_response(expression):
+        nonlocal dropped
+        result = original_eval(expression)
+        if '"rename"' in expression and not dropped:
+            dropped = True
+            raise MooError("injected lost rename response")
+        return result
+
+    monkeypatch.setattr(world, "eval", lose_response)
+    with pytest.raises(MooError, match="lost rename response"):
+        migrations.execute(store, proposal)
+    monkeypatch.setattr(world, "eval", original_eval)
+    recover(world)
+    assert world.read_registry()["tmoo_test_renamed"] == original
+    run(capsys, "package", "update", "tmoo_test_imported")
+    assert "tmoo_test_renamed" in world.load_files()
+    run(capsys, "apply", "--package", "tmoo_test_imported", "-y")
+    path = world.file_for("tmoo_test_renamed")
+    path.unlink()
+    run(capsys, "pull", "--package", "tmoo_test_imported")
+    assert path.exists()
+    (module / "item.moo").write_text(text.replace('"Imported"', '"Updated"'))
+    run(capsys, "package", "update", "tmoo_test_imported")
+    with pytest.raises(SystemExit):
+        cli.main(["pull", "--package", "tmoo_test_imported"])
+    assert world.load_files()["tmoo_test_renamed"].name == "Updated"
+    run(capsys, "apply", "--package", "tmoo_test_imported", "-y")
+    run(capsys, "package", "migrate", "tmoo_test_imported", "--namespace", "tmoo_test_final", "-y")
+    assert world.read_registry()["tmoo_test_final__item"] == original
+    run(capsys, "apply", "--package", "tmoo_test_imported", "-y")
+    assert "no changes" in run(capsys, "plan")
+    run(capsys, "rename-key", "tmoo_test_final__item", "tmoo_test_final__Item")
+    assert world.read_registry()["tmoo_test_final__Item"] == original
+    run(capsys, "apply", "--package", "tmoo_test_imported", "-y")
+    assert world.file_for("tmoo_test_final__Item").name == "tmoo_test_final__Item.moo"
+
+
+def test_module_cycle_recovers_created_identities_and_checks_incoming_removal(world, capsys, monkeypatch):
+    from types import SimpleNamespace
+    from terramoo.deployment import prepare
+    from terramoo.errors import MooError
+    from terramoo.ownership import recover
+    for module, other in (("one", "two"), ("two", "one")):
+        directory = world.objects_dir / module / "nested"
+        directory.mkdir(parents=True)
+        (directory.parent / "module.toml").write_text(f'schema_version = 1\nname = "{module}"\nreferences = ["{other}"]\n')
+        (directory / f"tmoo_test_{module}.moo").write_text(
+            f'object tmoo_test_{module}\n name: "{module}"\n parent: $thing\n'
+            f' property peer (flags: "rc") = @tmoo_test_{other};\nendobject\n')
+    proposal = prepare(world, SimpleNamespace(module=["one"], package=[]))
+    original_eval = world.eval
+    dropped = False
+
+    def lose_response(expression):
+        nonlocal dropped
+        result = original_eval(expression)
+        if '"create"' in expression and not dropped:
+            dropped = True
+            raise MooError("injected lost create response")
+        return result
+
+    monkeypatch.setattr(world, "eval", lose_response)
+    with pytest.raises(MooError, match="lost create response"):
+        proposal.run()
+    monkeypatch.setattr(world, "eval", original_eval)
+    before = world.read_registry()
+    recover(world)
+    run(capsys, "apply", "--module", "one", "-y")
+    after = world.read_registry()
+    assert before == after
+    assert world.eval(f'{after["tmoo_test_one"]}.peer') == after["tmoo_test_two"]
+    assert world.eval(f'{after["tmoo_test_two"]}.peer') == after["tmoo_test_one"]
+    for key in ("tmoo_test_one", "tmoo_test_two"):
+        world.file_for(key).unlink()
+    with pytest.raises(SystemExit):
+        cli.main(["apply", "--module", "one", "--destroy", "-y"])
+    assert world.read_registry() == after
+    run(capsys, "package", "recover")
+    run(capsys, "apply", "--module", "one", "--module", "two", "--destroy", "-y")
+    assert not world.read_registry()
 
 
 @pytest.mark.parametrize("key", ["tmoo_test_occupied", "TMOO_TEST_OCCUPIED"])

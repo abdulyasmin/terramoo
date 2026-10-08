@@ -59,7 +59,11 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
     def flush():
         if not batch:
             return
-        results = world.eval(world.helper("tmoo_apply", moolit.serialize(batch, dialect=dialect)))
+        session = getattr(world, "_package_session", None)
+        outgoing = session.before_batch(batch) if session else batch
+        results = world.eval(world.helper("tmoo_apply", moolit.serialize(outgoing, dialect=dialect)))
+        if session:
+            session.after_batch(batch, results)
         if not isinstance(results, list):
             why = f"malformed helper result list: {results!r}"
             for label in batch_labels:
@@ -88,13 +92,15 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
         batch_labels.clear()
 
     for op, label in zip(ops, labels):
-        text = moolit.serialize(op, dialect=dialect)
-        if batch and size + len(text) > limit:
+        session = getattr(world, "_package_session", None)
+        text = moolit.serialize(["owned", session.epoch, op] if session else op, dialect=dialect)
+        length = len(text.encode()) + 2
+        if batch and size + length > limit:
             flush()
             size = 0
         batch.append(op)
         batch_labels.append(label)
-        size += len(text)
+        size += length
     flush()
     return received
 
@@ -163,13 +169,15 @@ def _apply_ops(world: World, plan_ops: list[tuple], refs: Refs, outcome: Outcome
     flush()
 
 
-def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs) -> list[tuple]:
+def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs,
+                    *, full_context=False) -> list[tuple]:
     """Ops for the objects just created, diffed against what they actually
     are now: a core's `initialize` sets properties of its own (LambdaCore's
     `key = 0`, for one) that a plan made before the create cannot know."""
     from .export import export
 
-    live = export(world, refs, created)
+    context = [k for key in files if (k := refs.registry_key(key)) is not None] if full_context else created
+    live = export(world, refs, context)
     files_by_name = {key.lower(): value for key, value in files.items()}
     created_folded = {key.lower() for key in created}
     kept = [op for op in plan_ops
@@ -196,7 +204,8 @@ def _replan_created(world: World, plan_ops: list[tuple], created: list[str], fil
     return [op for op in kept if op[0] != "link"] + fresh + links
 
 
-def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = False, log=print) -> Outcome:
+def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = False,
+        stop_on_create_failure: bool = False, replan_keys: set[str] | None = None, log=print) -> Outcome:
     """Apply `plan`, made from `files`.  The objects it creates are re-read
     once they exist and diffed again."""
     outcome = Outcome()
@@ -205,7 +214,10 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
     plan_ops = list(plan.ops)
     if plan.creates:
         log("creating:")
-        create_nonces = {key: uuid4().hex for key, _, _ in plan.creates}
+        session = getattr(world, "_package_session", None)
+        if session and any(key.lower() not in session.nonces for key, _, _ in plan.creates):
+            raise MooError("live changes require additional creates; replan before applying")
+        create_nonces = {key: session.nonces[key.lower()] if session else uuid4().hex for key, _, _ in plan.creates}
         ops = [
             [
                 "create",
@@ -242,6 +254,10 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
                 outcome.failed.append((label, why))
                 log(f"  FAIL {label}: {why}")
         failed_created = {key for key, _, _ in plan.creates} - set(created)
+        if failed_created and stop_on_create_failure:
+            refs.pending = set()
+            world.save_state(world.read_registry())
+            return outcome
         for key in failed_created:
             actual_key = refs.registry_key(key)
             if actual_key is not None:
@@ -250,7 +266,10 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         refs.pending = failed_created
         refs.reindex()
         if created:
-            plan_ops = _replan_created(world, plan_ops, created, files, refs)
+            recheck = created if replan_keys is None else [
+                key for name in replan_keys if (key := refs.registry_key(name)) is not None
+            ]
+            plan_ops = _replan_created(world, plan_ops, recheck, files, refs, full_context=replan_keys is not None)
         # A key whose create failed now fails to resolve, so each op that
         # needs it is skipped instead of sending `@key` to the MOO.
         refs.pending = set()

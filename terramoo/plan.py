@@ -47,11 +47,17 @@ def _owner(refs: Refs, owner, *, live: bool = False):
     return refs.player if owner is None else refs.resolve_ref(owner, live=live)
 
 
-def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: Refs) -> Plan:
+def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: Refs,
+          *, selected: set[str] | None = None, destroy_keys: set[str] | None = None) -> Plan:
     plan = Plan()
     broken: set[str] = set()
     file_keys = _folded_names(files, "file keys")
     live_keys = _folded_names(live, "live keys")
+    selected_names = {key.lower() for key in selected} if selected is not None else set(file_keys)
+    unknown = selected_names - set(file_keys)
+    if unknown:
+        plan.problems.append(f"selected keys have no definition: {', '.join(sorted(unknown))}")
+    wanted = {key: obj for key, obj in files.items() if key.lower() in selected_names}
     for key in sorted(refs.legacy_keys):
         plan.warnings.append(
             f"registry key {key!r} is legacy; rename it with `tmoo rename-key {key!r} NEW`"
@@ -74,7 +80,7 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
 
     # Creates, parents first.  A parent that is itself a new object is
     # passed by registry name; the helper resolves it from what it just made.
-    new_keys = [k for k in files if refs.registry_key(k) is None or live_for(k) is None]
+    new_keys = [k for k in wanted if refs.registry_key(k) is None or live_for(k) is None]
     plan.gone = {
         target_for(k): refs.registry[refs.registry_key(k)]
         for k in new_keys
@@ -113,7 +119,7 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     current_exits = _exit_classes(
         {key: obj for key, obj in live.items() if obj is not None}, refs, live=True
     )
-    for key in files:
+    for key in wanted:
         if key in broken:
             continue
         obj = files[key]
@@ -132,11 +138,14 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         elif current is not None:
             plan.unchanged.append(key)
 
+    allowed_destroy = {k.lower() for k in destroy_keys} if destroy_keys is not None else (
+        {k.lower() for k in refs.registry} if selected is None else set()
+    )
     for key in refs.registry:
-        if key.lower() not in file_keys:
+        if key.lower() not in file_keys and key.lower() in allowed_destroy:
             plan.destroys[key] = refs.registry[key]
     if plan.ops or plan.creates:
-        plan.ops.append(("link", [Ref("@", target_for(k)) for k in files]))
+        plan.ops.append(("link", [Ref("@", target_for(k)) for k in wanted]))
     return plan
 
 

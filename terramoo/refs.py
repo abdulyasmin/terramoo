@@ -36,7 +36,7 @@ class Registry(dict[str, Obj]):
     @property
     def legacy_keys(self) -> set[str]:
         """Keys readable from old registries but unsafe as object-file names."""
-        return {key for key in self if not objdef.is_identifier(key)}
+        return {key for key in self if not objdef.is_identifier(key) or key.lower() == "me"}
 
 
 @dataclass

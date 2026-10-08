@@ -58,6 +58,34 @@ def _helper_install_source():
     return "\n".join(statements)
 
 
+def test_owned_objects_require_current_epoch_and_explicit_removal(offline_moo, tmp_path):
+    binary, database = offline_moo
+    script = f''' ;;
+tool = create(#-1);
+add_property(tool, "registry", {{{{}}, {{}}, {{}}, 0}}, {{#2, ""}});
+{_helper_install_source()}
+tool:tmoo_registry("bootstrap");
+tool:tmoo_packages("bootstrap");
+tool:tmoo_packages("begin", "world", "", "epoch1", {{{{"mine", "nonce", "instance", 1}}}});
+create_result = tool:tmoo_apply({{{{"owned", "epoch1", {{"create", "mine", #-1, "", #-1, "Mine", "nonce"}}}}}});
+o = tool.registry[2][1];
+unowned = tool:tmoo_apply({{{{"name", "mine", o, "nonce", "Bad"}}}});
+stale = tool:tmoo_apply({{{{"owned", "older", {{"name", "mine", o, "nonce", "Bad"}}}}}});
+desired = tool:tmoo_apply({{{{"owned", "epoch1", {{"destroy", "mine", o, "nonce"}}}}}});
+tool:tmoo_packages("begin", "world", "epoch1", "epoch2", {{{{"mine", "nonce", "instance", 0}}}});
+destroyed = tool:tmoo_apply({{{{"owned", "epoch2", {{"destroy", "mine", o, "nonce"}}}}}});
+return {{create_result[1][1], unowned[1][1], stale[1][1], desired[1][1], destroyed[1][1], valid(o)}};
+.
+quit
+'''.lstrip()
+    result = subprocess.run([str(binary), "-e", str(database), str(tmp_path / "out.db")],
+                            input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
+    assert reply, result.stdout + result.stderr
+    assert parse(reply[1]) == [1, 0, 0, 0, 1, 0]
+
+
 @pytest.fixture(scope="module")
 def offline_moo(tmp_path_factory):
     build = ROOT / "testbeds/lambdamoo/.build"

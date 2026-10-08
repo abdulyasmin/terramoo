@@ -26,6 +26,19 @@ def make_world(tmp_path, config):
     return World.load(tmp_path, None)
 
 
+@pytest.mark.parametrize("key", ["me", "ME"])
+def test_player_alias_cannot_be_a_desired_object_key(tmp_path, key):
+    w = make_world(tmp_path, 'player = "alice"\n[connection]\nhost = "localhost"\n')
+    (w.objects_dir / f"{key}.moo").write_text(f'object {key}\n name: "Unsafe"\n parent: #0\nendobject\n')
+    with pytest.raises(MooError, match="reserved for the player"):
+        w.load_files()
+
+
+def test_future_world_format_is_rejected_before_connecting(tmp_path):
+    with pytest.raises(MooError, match="unsupported world format"):
+        make_world(tmp_path, 'format_version = 2\nplayer = "alice"\n[connection]\nhost = "localhost"\n')
+
+
 def test_load_reads_generated_core_ignore_and_keep_settings(tmp_path):
     w = make_world(
         tmp_path,
@@ -124,8 +137,7 @@ def test_load_files_rejects_case_collisions(tmp_path, monkeypatch):
             return self.key < other.key
 
     sources = [Source("hall"), Source("Hall")]
-    objects_dir = SimpleNamespace(glob=lambda pattern: sources)
-    monkeypatch.setattr(World, "objects_dir", property(lambda self: objects_dir))
+    monkeypatch.setattr("terramoo.world.object_paths", lambda root: sources)
     with pytest.raises(MooError, match="differ only in case"):
         w.load_files()
 

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import objdef
+from .catalog import discover, object_paths, read_snapshot, safe_path
 from .errors import MooError
 from .model import ObjectDef
 from .moolit import Err, Obj
@@ -30,12 +31,13 @@ HELPER_VERBS = (
     "tmoo_apply",
     "tmoo_sysrefs",
     "tmoo_info",
+    "tmoo_packages",
 )
 SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 11
+HELPER_VERSION = 12
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 REGISTRY_STATE_PROP = "_terramoo_registry_state"
 REGISTRY_REVISION_PROP = "_terramoo_registry_revision"
@@ -82,6 +84,7 @@ DEFAULT_IGNORE_PROPS = {
     "object_size",
     GENERATION_PROP,
     TOOLBOX_PROP,
+    "_terramoo_package_state",
 }
 
 
@@ -141,7 +144,10 @@ def registry_value(raw) -> Registry:
 def validate_key(value: object) -> str:
     """Return an object/registry key, or reject it before it reaches a path or MOO."""
     try:
-        return objdef.validate_identifier(value, "registry key")
+        key = objdef.validate_identifier(value, "registry key")
+        if key.lower() == "me":
+            raise MooError("registry key me is reserved for the player; rename the legacy binding")
+        return key
     except objdef.FormatError as e:
         raise MooError(str(e)) from None
 
@@ -171,6 +177,8 @@ class World:
         if not cfg_path.exists():
             raise MooError(f"no such world {name!r} (looked for {cfg_path})")
         cfg = tomllib.loads(cfg_path.read_text())
+        if type(cfg.get("format_version", 1)) is not int or cfg.get("format_version", 1) != 1:
+            raise MooError(f"{cfg_path}: unsupported world format_version")
         conn = dict(cfg.get("connection", {}))
         if "player" not in cfg:
             raise MooError(f"{cfg_path}: `player` is required")
@@ -201,17 +209,26 @@ class World:
     def state_path(self) -> Path:
         return self.dir / "state.json"
 
-    def file_for(self, key: str) -> Path:
+    def file_for(self, key: str, *, into: str | None = None) -> Path:
         key = validate_key(key)
-        path = self.objects_dir / f"{key}.moo"
+        existing = discover(self.objects_dir, missing_ok=True).by_key().get(key.lower())
+        if existing is not None:
+            return existing
+        directory = self.objects_dir
+        if into is not None:
+            destination = Path(into)
+            if destination.is_absolute() or ".." in destination.parts:
+                raise MooError("--into must be a directory relative to objects/")
+            directory /= destination
+        path = directory / f"{key}.moo"
         self._check_object_path(path)
         return path
 
     def _check_object_path(self, path: Path) -> None:
         try:
-            path.resolve().relative_to(self.objects_dir.resolve())
-        except ValueError:
-            raise MooError(f"refusing to write {path}: path is outside the objects directory") from None
+            safe_path(self.objects_dir, path)
+        except MooError as e:
+            raise MooError(f"refusing to write {path}: unsafe path or outside the objects directory: {e}") from None
 
     def describe(self) -> str:
         c = self.connection
@@ -229,6 +246,7 @@ class World:
     ) -> dict[str, ObjectDef]:
         out = {}
         folded: dict[str, list[str]] = {}
+        key_paths = {}
         allowed_folded_pair = None
         if (
             allowed_case_pair is not None
@@ -236,7 +254,7 @@ class World:
             and allowed_case_pair[0].lower() == allowed_case_pair[1].lower()
         ):
             allowed_folded_pair = frozenset(allowed_case_pair)
-        for path in sorted(self.objects_dir.glob("*.moo")):
+        for path in object_paths(self.objects_dir):
             try:
                 validate_key(path.stem)
             except MooError as e:
@@ -245,18 +263,7 @@ class World:
                 if snapshots is None:
                     obj = objdef.parse(path.read_text())
                 else:
-                    with path.open("rb") as stream:
-                        before = os.fstat(stream.fileno())
-                        data = stream.read()
-                        after = os.fstat(stream.fileno())
-                    current = path.stat()
-                    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                    if identity != (
-                        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-                    ) or identity != (
-                        current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns
-                    ):
-                        raise MooError(f"{path.relative_to(self.root)} changed while it was being read")
+                    data, identity = read_snapshot(path)
                     obj = objdef.parse(data.decode("utf-8"))
             except ValueError as e:  # FormatError and LiteralError are ValueErrors
                 raise MooError(f"{path.relative_to(self.root)}: {e}") from None
@@ -271,16 +278,18 @@ class World:
                 and frozenset(same_fold) == allowed_folded_pair
             ):
                 raise MooError(
-                    f"keys {same_fold[0]!r} and {obj.key!r} differ only in case"
+                    f"duplicate keys or keys that differ only in case: {key_paths[obj.key.lower()]} and {path}"
                 )
             folded[obj.key.lower()] = same_fold
+            key_paths[obj.key.lower()] = path
             out[obj.key] = obj
         return out
 
-    def write_file(self, obj: ObjectDef, *, exclusive: bool = False) -> Path:
+    def write_file(self, obj: ObjectDef, *, exclusive: bool = False, into: str | None = None) -> Path:
         self.objects_dir.mkdir(parents=True, exist_ok=True)
-        path = self.file_for(obj.key)
+        path = self.file_for(obj.key, **({"into": into} if into is not None else {}))
         self._check_object_path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         text = objdef.render(obj)
         with path.open("x" if exclusive else "w") as stream:
             stream.write(text)
@@ -383,6 +392,7 @@ class World:
         # One non-suspending MOO task rereads and migrates all registry state.
         # No MOO task can interleave between that read and the three writes.
         self.eval(f'{tb}:tmoo_registry("bootstrap")')
+        self.eval(f'{tb}:tmoo_packages("bootstrap")')
         if HELPER_VERSION_PROP in props:
             self.transport.set_prop(tb, HELPER_VERSION_PROP, HELPER_VERSION)
         else:
