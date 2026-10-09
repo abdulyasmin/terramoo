@@ -18,7 +18,7 @@ from terramoo.moolit import parse, serialize
 from terramoo.model import ObjectDef, PropDef
 from terramoo.moolit import Obj, Ref
 from terramoo.refs import Refs
-from terramoo.world import HELPER_VERBS, registry_value
+from terramoo.world import HELPER_VERBS, registry_value, helper_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,13 +50,58 @@ def test_registry_reconcile_keeps_the_unprotected_revision_floor():
 def _helper_install_source():
     statements = []
     for name in HELPER_VERBS:
-        code = (ROOT / f"terramoo/helper/{name}.moo").read_text().splitlines()
+        code = helper_source(name)
         statements.extend([
             f'add_verb(tool, {{#2, "xd", "{name}"}}, {{"this", "none", "this"}});',
             f'errors = set_verb_code(tool, "{name}", {serialize(code)});',
             'if (errors) raise(E_INVARG, toliteral(errors)); endif',
         ])
     return "\n".join(statements)
+
+
+def test_player_reader_skips_unreadable_ancestry_and_refuses_secrets(offline_moo, tmp_path):
+    runner = [
+        'tool = this;',
+        'hidden = parent(player);',
+        'denied = `properties(hidden) ! E_PERM => E_PERM\';',
+        'selected = tool:tmoo_player_read("field", {"property", "description"});',
+        'secret = `tool:tmoo_player_read("field", {"property", "PASSWORD"}) ! E_PERM => E_PERM\';',
+        'return {denied, selected[6], selected[2], secret};',
+    ]
+    result = _run_helper_script(offline_moo, tmp_path, f'''
+hidden = create(#-1);
+hidden.r = 0;
+add_property(hidden, "description", "Selected public description", {{#2, "rc"}});
+who = create(hidden);
+who.owner = who;
+who.programmer = 1;
+set_player_flag(who, 1);
+set_property_info(who, "description", {{who, "rc"}});
+tool.owner = who;
+for i in [1..length(verbs(tool))]
+  info = verb_info(tool, i);
+  info[1] = who;
+  set_verb_info(tool, i, info);
+endfor
+add_verb(tool, {{who, "xd", "tmoo_test_player_worker"}}, {{"this", "none", "this"}});
+errors = set_verb_code(tool, "tmoo_test_player_worker", {serialize(runner)});
+if (errors) raise(E_INVARG, toliteral(errors)); endif
+add_verb(#2, {{#2, "xd", "tmoo_test_player_runner"}}, {{"this", "none", "this"}});
+errors = set_verb_code(#2, "tmoo_test_player_runner", {{"player = args[1];", "return args[2]:tmoo_test_player_worker();"}});
+if (errors) raise(E_INVARG, toliteral(errors)); endif
+return #2:tmoo_test_player_runner(who, tool);
+''')
+    from terramoo.moolit import Err
+    assert result == [Err("E_PERM"), "Selected public description", 0, Err("E_PERM")]
+
+
+def test_ordinary_helpers_reject_player_and_toolbox_bindings(offline_moo, tmp_path):
+    result = _run_helper_script(offline_moo, tmp_path, '''
+player_result = tool:tmoo_apply({{"register", "character", #2, "nonce"}});
+tool_result = tool:tmoo_apply({{"register", "tool", tool, "nonce"}});
+return {player_result[1][1], tool_result[1][1], tool.registry[1]};
+''')
+    assert result == [0, 0, []]
 
 
 def test_owned_objects_require_current_epoch_and_explicit_removal(offline_moo, tmp_path):
@@ -221,7 +266,7 @@ quit
     )
     assert result.returncode == 0, result.stdout + result.stderr
     replies = re.findall(r"^=> (.+)$", result.stdout, re.MULTILINE)
-    assert replies, result.stdout
+    assert len(replies) == 2, result.stdout
     reply = replies[-1]
     assert reply != ">>Unknown value<<", result.stdout
     return parse(reply)

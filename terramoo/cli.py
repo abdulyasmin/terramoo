@@ -104,6 +104,9 @@ def cmd_status(args):
             return
         if isinstance(w, World):
             from .ownership import operation_path
+            if (w.dir / ".player/operation.json").exists():
+                print("unfinished player operation; run tmoo player recover")
+                return
             if journal_path(w.dir).exists() or operation_path(w).exists():
                 print("unfinished package operation; run tmoo package recover")
                 return
@@ -120,6 +123,8 @@ def _status_locked(w: World, args):
     owned, version = w.server_info()
     print(f"world {w.name}: {w.describe()} ({version or 'unknown server'}) as {w.player_name} ({refs.player}), toolbox {w.toolbox}")
     print(f"registry: {len(refs.registry)} objects, files: {len(files)}")
+    if isinstance(w, World) and (w.dir / "player.moo").exists():
+        print("player.moo: selected player fields; use tmoo player plan/apply")
     if isinstance(w, World) and (w.dir / "packages.lock.json").exists():
         from .views import status
         status(w, selected)
@@ -265,6 +270,8 @@ def _adopt_locked(w: World, args) -> None:
         if not args.object or not args.key:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
         o = parse_object_arg(args.object)
+        if o == refs.player or o == getattr(w, "_toolbox", None):
+            raise MooError("players and the toolbox cannot be adopted; use tmoo player track")
         requested_key = validate_key(args.key)
         existing_key = next((key for key in refs.registry if key.lower() == requested_key.lower()), None)
         if verify:
@@ -452,6 +459,8 @@ def _world_write_lock(w: World, *, shared: bool = False, recovery: bool = False)
                 raise MooError("unfinished local transaction; run tmoo package recover")
             if not shared and not recovery and (w.dir / ".packages/operation.json").exists():
                 raise MooError("unfinished remote operation; run tmoo package recover")
+            if not recovery and (w.dir / ".player/operation.json").exists():
+                raise MooError("unfinished player operation; run tmoo player recover")
             yield
         finally:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
@@ -759,6 +768,8 @@ def cmd_rename_key(args):
     """Lock, prepare local migration, CAS-rename, then finalize files."""
     w = _world(args)
     with _world_write_lock(w, recovery=True):
+        if isinstance(w, World) and (w.dir / ".player/operation.json").exists():
+            raise MooError("unfinished player operation; run tmoo player recover")
         journal = w.state_path.with_name("state.json.rename-recovery.json")
         if getattr(args, "recover", False):
             if getattr(args, "old", None) is not None or getattr(args, "new", None) is not None:
@@ -776,7 +787,7 @@ def cmd_rename_key(args):
         else:
             if getattr(args, "old", None) is None or getattr(args, "new", None) is None:
                 raise MooError("rename-key needs OLD and NEW (or use --recover)")
-            if _structured_world(w, args) and objdef.is_identifier(args.old) and args.old.lower() != "me":
+            if (_structured_world(w, args) or isinstance(w, World) and (w.dir / "player.moo").exists()) and objdef.is_identifier(args.old) and args.old.lower() != "me":
                 from .installation import Store
                 from .migrations import prepare, execute
                 if journal.exists() or journal_path(w.dir).exists():
@@ -1182,6 +1193,9 @@ def cmd_check(args):
         files = w.load_files()
         deployment.validate_properties(w, files)
         graph = deployment.module_graph(w, files)
+        if isinstance(w, World):
+            from .player import check
+            check(w)
         print(f"checked {len(files)} objects, {len(graph.modules)} modules")
 
 
@@ -1274,6 +1288,67 @@ def cmd_package(args):
             print(rename_instance(store, args.instance, args.new))
 
 
+def cmd_player(args):
+    from . import player as player_mod, playerdef
+    w = _world(args)
+    readonly = args.action in {"inspect", "status", "check", "plan", "diff"}
+    with _world_write_lock(w, shared=readonly, recovery=args.action in {"recover", "inspect", "status"}):
+        if args.action == "check":
+            profile = player_mod.check(w)
+            print(f"checked {len(profile.entries())} selected player fields")
+        elif args.action in {"inspect", "status"}:
+            row = player_mod.call(w, "tmoo_player_read", "inspect")
+            print(f"player {row[0]}, owner {row[1]}, parent {row[4]}, programmer={row[2]}, wizard={row[3]}")
+            for name, info in row[5]:
+                print(f"  property {name}: owner {info[0]}, flags {info[1]!r}")
+            for index, info, vargs in row[6]:
+                print(f"  verb {info[2]!r}: owner {info[0]}, flags {info[1]!r}, args {' '.join(vargs)}")
+            print(f"selected fields: {len(player_mod.load(w).entries())}")
+            state = player_mod.remote(w)
+            print(f"player revision {state[2]} ({state[5]})")
+            if state[5] == "running" and state[6]:
+                print(f"callback task {state[6][0]}; wait for it to finish before recovery")
+            if state[3] or player_mod.paths(w)[2].exists():
+                print("unfinished player operation; run player recover in its checkout")
+        elif args.action in {"track", "pull"}:
+            count = player_mod.track(w, player_mod.selectors(args), pull=args.action == "pull")
+            print(f"accepted {count} live field(s) into player.moo")
+        elif args.action == "untrack":
+            player_mod.untrack(w, player_mod.selectors(args))
+            print("stopped tracking selected fields; live player unchanged")
+        elif args.action in {"remove", "clear", "detach"}:
+            player_mod.stage_removal(w, player_mod.selectors(args), args.action)
+            print("prepared player changes; review player plan before player apply")
+        elif args.action == "recover":
+            from .storage import recover
+            if not player_mod.paths(w)[2].exists():
+                raise MooError("no player operation to recover")
+            if journal_path(w.dir).exists():
+                recover(w.dir)
+            print(player_mod.recover(w, accept_live=args.accept_live))
+        else:
+            prepared = player_mod.prepare(w)
+            if args.action == "diff":
+                live = playerdef.PlayerDef()
+                refs = w.refs()
+                for item in prepared.fields:
+                    player_mod.accept(live, item["kind"], item["name"], item["before"], refs)
+                diff = list(difflib.unified_diff(playerdef.render(live).splitlines(True),
+                    playerdef.render(prepared.profile).splitlines(True), fromfile="moo/player.moo", tofile="files/player.moo"))
+                sys.stdout.writelines(diff or ["no player differences\n"])
+            else:
+                print(player_mod.describe(prepared))
+            if prepared.problems:
+                raise MooError("fix player problems before applying")
+            if args.action == "apply":
+                if not prepared.changes and not prepared.needs_receipt:
+                    return
+                if not args.yes and input("apply player changes? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("aborted")
+                    return
+                print(f"applied {player_mod.apply(prepared)} player change(s)")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="tmoo", description="a MOO player's objects as files, on any MOO")
     ap.add_argument("--world", "-w", help="world name under worlds/ (default: the only one, or $TMOO_WORLD)")
@@ -1300,6 +1375,18 @@ def main(argv=None):
     _selectors(status, readonly=True)
     sub.add_parser("check", help="validate world files and modules offline").set_defaults(fn=cmd_check)
     sub.add_parser("modules", help="list modules and dependencies offline").set_defaults(fn=cmd_modules)
+    plr = sub.add_parser("player", help="manage selected properties, settings, verbs and features on @me")
+    player_actions = plr.add_subparsers(dest="action", required=True)
+    for action in ("inspect", "status", "check", "plan", "diff", "apply", "track", "pull", "untrack", "remove", "clear", "detach", "recover"):
+        parser = player_actions.add_parser(action)
+        parser.set_defaults(fn=cmd_player)
+        if action in ("track", "pull", "untrack", "remove", "clear", "detach"):
+            for kind in ("property", "verb", "setting", "feature"):
+                parser.add_argument("--" + kind, action="append", default=[])
+        if action == "apply":
+            parser.add_argument("--yes", "-y", action="store_true")
+        if action == "recover":
+            parser.add_argument("--accept-live", action="store_true", help="accept inspected live state after an uncertain callback; never replay it")
     pkg = sub.add_parser("package", help="validate and manage package instances")
     actions = pkg.add_subparsers(dest="action", required=True)
     pc = actions.add_parser("check", help="validate source without a world")

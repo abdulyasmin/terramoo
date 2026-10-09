@@ -292,6 +292,126 @@ package ownership; a new world-format marker cannot make them safe. Downgrading
 requires a validated export/flattening procedure or a matching world and
 database backup.
 
+## Managing your player
+
+`worlds/<world>/player.moo` manages selected fields on the authenticated
+`@me`. Player commands are separate from object and module commands:
+`tmoo apply --module ...` changes objects; `tmoo player apply` changes the
+player. Ordinary adoption, export and mutation refuse player objects and
+the toolbox, including bindings left in an old registry.
+
+After upgrading, run `tmoo bootstrap` to install helper version 14 on each
+world. Start by inspecting metadata and selecting the fields you want:
+
+```sh
+tmoo player inspect
+tmoo player track --verb '@who' --verb probe --property description
+tmoo player track --setting aliases --setting 'display:shortprep'
+tmoo player check          # offline validation; also included in tmoo check
+tmoo player diff
+tmoo player plan
+tmoo player apply          # asks first; -y skips
+tmoo player pull           # accept live changes for the selected fields
+```
+
+Use a verb's full local name specification, as printed by `inspect`.
+Tracking preserves its owner, flags, arguments and source; inherited verbs
+are never edited. A new specification that collides with an existing local
+alias is refused; remove the old definition explicitly before replacing
+its name specification. Properties must belong to the player. Only explicitly
+selected values are read. The reader does not enumerate ancestor
+properties, so an unreadable player class does not prevent tracking a
+readable field inherited through it.
+
+The file uses the same property and verb syntax as object files, with a
+`player` header and no name, parent, location, owner or object flags:
+
+```moo
+player
+  override description = "A description maintained in Git.";
+  property favorite_color (flags: "rc") = "purple";
+
+  verb wave (any none none) flags: "rd"
+    player:tell("You wave.");
+  endverb
+
+  setting aliases = {"alice", "Alice Example"};
+  setting "display:shortprep" = 1;
+  feature @tools__commands;
+endplayer
+```
+
+Track an existing field before editing its definition. New personal
+properties and local verbs can be added directly to the file. A new
+`feature` declaration can activate a feature that is not already attached.
+The referenced object must be deployed first. Keys in property values and
+feature declarations participate in object-key and namespace migrations;
+MOO source inside verbs is kept verbatim.
+
+The LambdaCore-family settings adapters support `aliases`, `gender`,
+`home`, `linelen`, `pagelen`, and individual `display:NAME`, `edit:NAME`,
+`prog:NAME`, and `build:NAME` options. Use canonical names from the core's
+option definitions; shorthand options that change several fields are
+excluded. These adapters use the core's setter verbs and verify the
+result. Aliases must include the current player name. Setters
+maintain name indexes, pronouns, abode checks and option validation. A
+missing setter or an unsupported setting fails explicitly. ANSI settings
+and other core-specific extensions require a separate adapter; they cannot
+be assigned through the generic property path. Description changes use
+`set_description`.
+
+Password, token, email, mail, connection, quota, toolbox and derived
+properties are protected before any value is read. `keep_props` cannot
+enable them for player management. Select custom properties only when
+their values belong in the world repository. Player lifecycle operations,
+account renaming and privilege changes are excluded.
+
+An omitted field is left alone. These commands distinguish forgetting a
+field from changing it on the MOO:
+
+```sh
+tmoo player untrack --verb probe       # leave the live verb alone
+tmoo player remove --verb probe        # stage deletion of a tracked local verb
+tmoo player remove --property custom   # stage deletion of a tracked local property
+tmoo player clear --property description  # restore inheritance; keep tracking clear state
+tmoo player detach --feature @tools__commands
+tmoo player plan
+tmoo player apply
+```
+
+The corresponding declarations are `remove verb probe;`,
+`remove property custom;`, `clear property description;`, and
+`detach @tools__commands;`. Successful deletions and detachments leave the
+file; a `clear` declaration remains and follows the inherited value.
+
+Player application compares the file and live field against its last
+accepted snapshot in `.player/state.json`. Conflicting live edits stop
+application. `player diff` shows the current difference; `player pull`
+explicitly accepts live values into the file and receipt, replacing local
+edits for those fields. Each write rechecks its expected value, metadata
+and verb descriptor. A stale checkout must refresh its receipt before
+writing. Keep `.player/` with the world when backing it up or moving it.
+
+An interrupted application retains `.player/operation.json`. Run
+`tmoo player recover`; it reconciles recorded results without replaying
+setters or feature hooks. If a callback was interrupted or failed, inspect
+its effects and use `tmoo player recover --accept-live` to accept the live
+values of all selected fields. Core callbacks can have effects beyond
+those fields, and recovery does not roll those effects back. Recovery
+refuses to finish while the callback task is still suspended. Other
+terramoo mutations are blocked while a player operation remains active.
+
+Packages contain ordinary objects and may refer to `@me`. They do not own
+the player. The world player file selects feature objects from any number
+of independent installations. Apply those objects before activating their
+features. Unrelated live features remain enabled. Before removing an
+installation, detach its features and change any remaining player
+references; removal checks both the desired player references and live
+selected values, plus the current player's feature list even when it is
+untracked. The server rechecks selected fields and the player revision
+immediately before recycling. A staged package removal still permits
+detaching its live features before `apply --destroy`.
+
 ## The file format
 
 One object per file, named by its *key*: a registry name that stays put
@@ -340,9 +460,10 @@ world; `override` is the one keyword of ours.
 ## How it works
 
 - `tmoo bootstrap` creates a *toolbox*, an object the player owns reached as
-  `player.tmoo`, and installs eight helper verbs on it from
+  `player.tmoo`, and installs eleven helper verbs on it from
   `terramoo/helper/`: `tmoo_registry`, `tmoo_callback`, `tmoo_generation`,
-  `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs`, `tmoo_info`, and `tmoo_packages`.
+  `tmoo_export`, `tmoo_apply`, `tmoo_sysrefs`, `tmoo_info`, `tmoo_packages`,
+  `tmoo_player_read`, `tmoo_player_write`, and `tmoo_player`.
   They are plain LambdaMOO 1.8,
   so one copy runs on every server, and they refuse any caller but their
   owner. Re-run `tmoo bootstrap` after upgrading terramoo to install updated
@@ -426,7 +547,8 @@ between machines keeps one build per platform; the working databases in
 `.run/` are shared. They listen on 127.0.0.1:17002, 17001 and 17003, each with a
 non-wizard programmer `tester`/`tester`. The live round trip creates,
 edits, pulls, recycles and recreates objects. It also covers package isolation,
-imports, migrations, interrupted operations, and reciprocal modules, then
+imports, migrations, interrupted operations, reciprocal modules, selected
+player fields and feature attachments from independent installations, then
 removes the test objects:
 
 ```

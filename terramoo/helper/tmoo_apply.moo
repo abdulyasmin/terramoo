@@ -13,6 +13,9 @@ revision = 0;
 protected_registry = "_terramoo_registry_state" in properties(this) && "_terramoo_registry_revision" in properties(this);
 for op in (ops)
   try
+    if ("_terramoo_player_state" in properties(this) && this._terramoo_player_state[4])
+      raise(E_INVARG, "unfinished player operation; run tmoo player recover");
+    endif
     "Earlier ops or suspended tasks may have changed the registry.";
     reg = this.registry;
     reg_length = length(reg);
@@ -55,6 +58,17 @@ for op in (ops)
       this:tmoo_packages("check", package_token, op);
     endif
     kind = op[1];
+    "Protect these identities even if a legacy or manually edited registry names them.";
+    if (kind == "register" || kind == "destroy" || !(kind in {"create", "rename", "link"}))
+      protected = op[3];
+    elseif (kind == "rename")
+      protected = op[4];
+    else
+      protected = #-1;
+    endif
+    if (valid(protected) && (is_player(protected) || protected == this))
+      raise(E_PERM, "players and the toolbox cannot be ordinary managed objects; use tmoo player");
+    endif
     r = 1;
     if (kind == "create")
       key = op[2];
@@ -197,6 +211,20 @@ for op in (ops)
           raise(E_INVARG, tostr("key ", key, " has an unverified legacy binding"));
         endif
         if (valid(o))
+          if (length(op) > 4)
+            guard = op[5];
+            for field in (guard[2])
+              if (!equal(this:tmoo_player_read("field", field[1]), field[2]))
+                raise(E_INVARG, "selected player field changed before recycling; recheck references");
+              endif
+            endfor
+            if (this:tmoo_player("read")[3] != guard[1])
+              raise(E_INVARG, "player deployment changed before recycling; recheck references");
+            endif
+          endif
+          if (o in this:tmoo_player_read("features"))
+            raise(E_INVARG, "detach this feature from the player before recycling it");
+          endif
           if (this:tmoo_generation("read", o) != nonce)
             raise(E_INVARG, tostr("key ", key, " names a different object generation"));
           endif

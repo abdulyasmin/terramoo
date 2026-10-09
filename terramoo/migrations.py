@@ -60,6 +60,10 @@ def prepare(store, mapping, *, namespace=None):
         destination = path.with_name(mapping[key] + ".moo") if key in mapping else path
         if output != text or destination != path:
             changes[destination] = output
+    from .player import paths as player_paths, rewrite_files
+    expected.update({p: p.read_bytes() if p.exists() else None for p in player_paths(store.world)[:2]})
+    player_changes = rewrite_files(store.world, mapping)
+    changes.update(player_changes)
     lock, config = deepcopy(store.lock), deepcopy(store.config)
     for name, item in lock["instances"].items():
         affected = False

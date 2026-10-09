@@ -127,8 +127,10 @@ def _target(world_dir: Path, relative: str) -> Path:
     path = Path(relative)
     if path.is_absolute() or not path.parts or ".." in path.parts:
         raise MooError(f"unsafe transaction path: {relative}")
-    if path.parts[0] not in {"objects", ".packages", "world.toml", "packages.lock.json", "state.json"}:
+    if path.parts[0] not in {"objects", ".packages", "world.toml", "packages.lock.json", "state.json", "player.moo", ".player"}:
         raise MooError(f"unexpected transaction path: {relative}")
+    if path.parts[0] == ".player" and path != Path(".player/state.json"):
+        raise MooError("player transactions may replace only the player receipt")
     if path == Path(".packages/transaction.json"):
         raise MooError("transaction cannot replace its journal")
     return safe_path(world_dir, world_dir / path)

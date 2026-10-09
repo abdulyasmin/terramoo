@@ -18,6 +18,9 @@ if (mode == "bootstrap")
 elseif (mode == "read")
   return state;
 elseif (mode == "begin" || mode == "import")
+  if ("_terramoo_player_state" in properties(this) && this._terramoo_player_state[4])
+    raise(E_INVARG, "unfinished player operation; run tmoo player recover");
+  endif
   world_id = args[2];
   expected = args[3];
   epoch = args[4];

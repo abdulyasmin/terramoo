@@ -25,6 +25,10 @@ file is what an agent needs to avoid breaking things.
   `ignore_props`); don't special-case it in plan.
 - **Secrets never touch a file in a repo.** Keychain service `terramoo`,
   `$TMOO_SECRET`, or `~/.config/terramoo/<world>.secret`.
+- **Players use `player.moo`, outside the object registry.** Read selected
+  fields only; never use ordinary export/adoption for a player. Preserve
+  inherited clear state and use core setters for settings and features.
+  Do not replay an uncertain player callback; use `tmoo player recover`.
 
 ## Commands
 
@@ -42,6 +46,8 @@ file is what an agent needs to avoid breaking things.
     terramoo/model.py        ObjectDef / PropDef / VerbDef
     terramoo/refs.py         registry + $names, symbolize/resolve
     terramoo/plan.py         the pure diff
+    terramoo/playerdef.py    selected player definition and protected fields
+    terramoo/player.py       player snapshots, planning, application and recovery
     terramoo/export.py       MOO -> ObjectDef via tmoo_export
     terramoo/apply.py        ops -> MOO via tmoo_apply
     terramoo/world.py        world.toml, toolbox, bootstrap

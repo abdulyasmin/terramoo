@@ -13,6 +13,9 @@ mode = args[1];
 o = args[2];
 prop = "_terramoo_generation";
 info = {this.owner, "r"};
+if (mode in {"stamp", "chparent"} && valid(o) && (is_player(o) || o == this))
+  raise(E_PERM, "players and the toolbox cannot be ordinary managed objects");
+endif
 if (mode == "read")
   if (!valid(o) || `is_clear_property(o, prop) ! ANY => 1')
     return "";

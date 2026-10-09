@@ -14,7 +14,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import objdef
+from . import moolit, objdef
 from .catalog import discover, object_paths, read_snapshot, safe_path
 from .errors import MooError
 from .model import ObjectDef
@@ -33,12 +33,15 @@ HELPER_VERBS = (
     "tmoo_sysrefs",
     "tmoo_info",
     "tmoo_packages",
+    "tmoo_player_read",
+    "tmoo_player_write",
+    "tmoo_player",
 )
 SUSPENDING_HELPERS = ("tmoo_export", "tmoo_apply")
 TOOLBOX_NAME = "terramoo toolbox"
 TOOLBOX_PROP = "tmoo"
 GENERATION_PROP = "_terramoo_generation"
-HELPER_VERSION = 13
+HELPER_VERSION = 14
 HELPER_VERSION_PROP = "_terramoo_helper_version"
 REGISTRY_STATE_PROP = "_terramoo_registry_state"
 REGISTRY_REVISION_PROP = "_terramoo_registry_revision"
@@ -86,7 +89,16 @@ DEFAULT_IGNORE_PROPS = {
     GENERATION_PROP,
     TOOLBOX_PROP,
     "_terramoo_package_state",
+    "_terramoo_player_state",
 }
+
+
+def helper_source(name: str, serialize=moolit.serialize) -> list[str]:
+    source = (HELPER_DIR / f"{name}.moo").read_text()
+    if name == "tmoo_player_read":
+        from .playerdef import PROTECTED
+        source = source.replace("__TMOO_PLAYER_PROTECTED__", serialize(sorted(PROTECTED)))
+    return source.splitlines()
 
 
 def find_root() -> Path:
@@ -387,7 +399,7 @@ class World:
         if "registry" not in props:
             self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})')
         for name in HELPER_VERBS:
-            code = (HELPER_DIR / f"{name}.moo").read_text().splitlines()
+            code = helper_source(name, self.transport.serialize)
             r = self.transport.install_verb(tb, name, code)
             log(f"{tb}:{name} {r}")
         # One non-suspending MOO task rereads and migrates all registry state.

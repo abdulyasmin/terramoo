@@ -32,6 +32,9 @@ for binding in (bindings)
     out = {@out, {o}};
     continue;
   endif
+  if (is_player(o) || o == this)
+    raise(E_PERM, "players and the toolbox cannot be ordinary managed objects; use tmoo player");
+  endif
   if (!nonce)
     raise(E_INVARG, tostr(key, ": unverified legacy binding; confirm it with tmoo adopt ", o, " ", key, " --verify"));
   endif

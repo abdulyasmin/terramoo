@@ -211,6 +211,10 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
     outcome = Outcome()
     if hasattr(world, "require_helper_version"):
         world.require_helper_version()
+    player_guard = None
+    if isinstance(world, World) and destroy and plan.destroys:
+        from .player import incoming_check
+        player_guard = incoming_check(world, refs, plan.destroys)
     plan_ops = list(plan.ops)
     if plan.creates:
         log("creating:")
@@ -294,7 +298,7 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
                 outcome.failed.append((label, why))
                 log(f"  SKIP {label}: {why}")
                 continue
-            ops.append(["destroy", key, o, nonce])
+            ops.append(["destroy", key, o, nonce, *([player_guard] if player_guard is not None else [])])
             labels.append(label)
         _send(world, ops, labels, outcome, log)
     refs.replace_registry(world.read_registry())

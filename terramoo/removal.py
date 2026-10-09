@@ -24,6 +24,8 @@ def definitions(prepared):
 def incoming_check(prepared, candidates):
     refs = prepared.refs
     refs.replace_registry(prepared.world.read_registry())
+    from .player import incoming_check as player_incoming
+    player_incoming(prepared.world, refs, candidates)
     survivors = [key for key in refs.registry if key.lower() not in candidates]
     live = export.export(prepared.world, refs, survivors)
     for key, obj in [*prepared.files.items(), *((k, v) for k, v in live.items() if v is not None)]:
