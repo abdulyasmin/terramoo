@@ -353,7 +353,11 @@ The LambdaCore-family settings adapters support `aliases`, `gender`,
 `prog:NAME`, and `build:NAME` options. Use canonical names from the core's
 option definitions; shorthand options that change several fields are
 excluded. These adapters use the core's setter verbs and verify the
-result. Aliases must include the current player name. Setters
+result. Aliases must include the current player name. The core stores a
+flag option as 1 or 0, so write `1` or `0`; `true`, `false`, floats and
+other numbers are refused because they could never be read back as
+written. Write `0` to turn an option off: the core drops an empty value.
+Setters
 maintain name indexes, pronouns, abode checks and option validation. A
 missing setter or an unsupported setting fails explicitly. ANSI settings
 and other core-specific extensions require a separate adapter; they cannot
@@ -388,15 +392,20 @@ Player application compares the file and live field against its last
 accepted snapshot in `.player/state.json`. Conflicting live edits stop
 application. `player diff` shows the current difference; `player pull`
 explicitly accepts live values into the file and receipt, replacing local
-edits for those fields. Each write rechecks its expected value, metadata
-and verb descriptor. A stale checkout must refresh its receipt before
+edits for those fields. A live value that `player.moo` cannot hold,
+because it nests more than 100 levels deep or is a map whose keys
+terramoo would merge, cannot be tracked or pulled: plan reports it, and
+`tmoo player untrack` stops managing that field. Each write rechecks its
+expected value, metadata and verb descriptor. A stale checkout must refresh its receipt before
 writing. Keep `.player/` with the world when backing it up or moving it.
 
 An interrupted application retains `.player/operation.json`. Run
 `tmoo player recover`; it reconciles recorded results without replaying
 setters or feature hooks. If a callback was interrupted or failed, inspect
 its effects and use `tmoo player recover --accept-live` to accept the live
-values of all selected fields. Core callbacks can have effects beyond
+values of all selected fields. A field whose live value terramoo cannot
+read, or cannot write to `player.moo`, is untracked instead, and recovery
+names it. Core callbacks can have effects beyond
 those fields, and recovery does not roll those effects back. Recovery
 refuses to finish while the callback task is still suspended. Other
 terramoo mutations are blocked while a player operation remains active.
@@ -444,8 +453,20 @@ endobject
   `@name` an object this world manages, `@me` the player. Anything else the
   MOO refers to by number stays a number. mooR's symbols (`'name`) and UUID
   objects (`#048D05-1234567890`) read and write as themselves.
+- A value is compared by its literal, so `1`, `1.0` and `true` are three
+  different values, and strings differ by case. Changing `1` to `1.0` in a
+  file is a change that apply makes. For the same reason a map cannot hold
+  two keys that differ only in type, such as `1` and `1.0`, and the MOO
+  keeps only one of two string keys that differ only in letter case, so a
+  file may not hold those either. Lists and maps nest at most 100 levels
+  deep. A live value that breaks these rules stops export with an error. To
+  leave its property unmanaged, add it to `ignore_props`, then run
+  `tmoo pull` for that object to rewrite the file without it.
 - `owner:` on the object, a property or a verb is omitted when it is the
-  player.
+  player. Changing any owner needs a wizard. Apply never changes an object's
+  owner, and a new object is owned by the player; plan prints a note when
+  an object's `owner:` differs from the MOO. A property or verb owner change
+  is sent like any other change, so it fails unless the player is a wizard.
 - Verb code is indented four spaces, with the MOO's own two-space unparse
   indent inside that. Keep that style and a save shows up as a code diff,
   not a whole-verb rewrite.

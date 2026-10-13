@@ -1071,3 +1071,145 @@ def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monk
     assert cli._write_exports(w, SimpleNamespace(registry={"hall": Obj(2)}), ["hall"]) == 1
     written = objdef.parse(w.file_for("hall").read_text())
     assert [prop.name for prop in written.props] == ["a", "c", "new"]
+
+
+OWNER_NOTE = "hall: the file says owner #99, but the MOO has @me; apply never changes an object's owner"
+
+
+def test_plan_shows_notes_even_when_there_is_nothing_to_change(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_world", lambda args: SimpleNamespace())
+    monkeypatch.setattr(cli, "_plan", lambda w: (None, {}, Plan(notes=[OWNER_NOTE])))
+
+    cli.cmd_plan(SimpleNamespace(destroy=False))
+
+    assert capsys.readouterr().out == f"  ? {OWNER_NOTE}\nno changes\n"
+
+
+def test_plan_shows_notes_alongside_changes(monkeypatch, capsys):
+    pending = Plan(ops=[("name", Ref("@", "hall"), "Great Hall")], notes=[OWNER_NOTE])
+    monkeypatch.setattr(cli, "_world", lambda args: SimpleNamespace())
+    monkeypatch.setattr(cli, "_plan", lambda w: (None, {}, pending))
+
+    cli.cmd_plan(SimpleNamespace(destroy=False))
+
+    out = capsys.readouterr().out
+    assert "  ~ name @hall Great Hall\n" in out
+    assert f"  ? {OWNER_NOTE}\n" in out
+
+
+def test_apply_with_only_notes_changes_nothing(monkeypatch, capsys):
+    saved = []
+    world = SimpleNamespace(save_state=saved.append)
+    refs = Refs(player=Obj(1), registry={"hall": Obj(2)})
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_plan", lambda w: (refs, {}, Plan(notes=[OWNER_NOTE])))
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked for confirmation"))
+    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran"))
+
+    cli.cmd_apply(SimpleNamespace(yes=False, destroy=False))
+
+    assert capsys.readouterr().out == f"  ? {OWNER_NOTE}\nno changes\n"
+    assert saved
+
+
+def test_rename_key_recovery_refuses_a_destination_that_differs_only_in_value_type(
+    tmp_path, monkeypatch
+):
+    # Equal by Python's ==, but a different MOO value: keep both files.
+    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
+    raw_registry[3] = 2
+    old = ObjectDef(key="old_key", name="Old", parent=Obj(2), props=[PropDef("count", 1)])
+    new = ObjectDef(key="new_key", name="Old", parent=Obj(2), props=[PropDef("count", 1.0)])
+    world.write_file(old)
+    world.write_file(new)
+    journal = _write_rename_recovery_journal(world)
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+
+    with pytest.raises(MooError, match="both"):
+        cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
+
+    assert objdef.parse(world.file_for("old_key").read_text()) == old
+    assert objdef.parse(world.file_for("new_key").read_text()) == new
+    assert journal.exists()
+
+
+def test_flat_plan_refuses_a_file_property_that_export_ignores():
+    # Otherwise plan would re-add or overwrite the property every time.
+    file_obj = ObjectDef(key="hall", name="Hall", parent=Obj(2), props=[PropDef("exits", [])])
+    world = SimpleNamespace(refs=lambda: Refs(player=Obj(1), registry={}),
+                            load_files=lambda: {"hall": file_obj}, ignore_props={"exits"})
+
+    with pytest.raises(MooError, match=r"hall: desired runtime properties are excluded by ignore_props: exits; "
+                                       r".*tmoo pull hall"):
+        cli._plan(world)
+
+
+def test_adopt_that_cannot_export_saves_state_and_says_how_to_finish(monkeypatch):
+    world = AdoptWorld()
+
+    def succeed(call):
+        _, arg = call
+        _, _, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [["mine"], [obj], [nonce]]
+        return [[1, Obj(10)]]
+
+    def cannot_export(w, refs, keys, **kwargs):
+        raise MooError("tmoo_export returned mine property 'm' with a malformed literal")
+
+    world.reply = succeed
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", cannot_export)
+
+    with pytest.raises(MooError, match=r"registered mine but wrote no files: .*then run `tmoo pull mine` to write them"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
+    assert world.saved == [{"mine": Obj(10)}]
+
+
+def _real_export_error():
+    from terramoo import export as export_mod
+    record = [Obj(10), "Mine", Obj(1), Obj(-1), Obj(1), "", [["m", 1, Obj(1), "rc", '[1 -> "a", 1.0 -> "b"]']], []]
+    with pytest.raises(MooError) as caught:
+        export_mod._to_def("mine", record, Refs(player=Obj(1), registry={"mine": Obj(10)}), set())
+    return caught.value
+
+
+def test_adopt_into_a_folder_that_cannot_export_names_the_folder(monkeypatch):
+    world = AdoptWorld()
+
+    def succeed(call):
+        _, arg = call
+        _, _, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [["mine"], [obj], [nonce]]
+        return [[1, Obj(10)]]
+
+    def cannot_export(w, refs, keys, **kwargs):
+        raise _real_export_error()
+
+    world.reply = succeed
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", cannot_export)
+
+    with pytest.raises(MooError, match=r"then run `tmoo pull mine --into 'my rooms'` to write them"):
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine", into="my rooms"))
+
+
+def test_a_verify_adopt_that_cannot_export_is_simply_run_again(monkeypatch):
+    # A pull would overwrite the local definition that --verify keeps.
+    world = AdoptWorld(registry={"mine": Obj(10)})
+
+    def succeed(call):
+        _, arg = call
+        _, _, obj, nonce = moolit.parse(arg)[0]
+        world.raw_registry = [["mine"], [obj], [nonce]]
+        return [[1, Obj(10)]]
+
+    def cannot_export(w, refs, keys, **kwargs):
+        raise _real_export_error()
+
+    world.reply = succeed
+    monkeypatch.setattr(cli, "_world", lambda args: world)
+    monkeypatch.setattr(cli, "_write_exports", cannot_export)
+
+    with pytest.raises(MooError, match=r"then run this adopt again to write them") as caught:
+        cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine", verify=True))
+    assert "tmoo pull" not in str(caught.value)

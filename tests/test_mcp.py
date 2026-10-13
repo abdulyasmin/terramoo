@@ -171,3 +171,20 @@ def test_moor_dialect_is_used_for_mcp_set_prop_literals():
     t.set_prop(Obj(9), "greeting", "Hé\n")
 
     assert sent[-1][1]["value"] == r'"H\u00E9\n"'
+
+
+def test_an_answer_may_wrap_a_value_nested_to_the_limit():
+    depth = moolit.MAX_DEPTH + 3
+    literal = "{" * depth + "}" * depth
+    assert moolit.nesting(transport(json.dumps(literal)).eval("x")) == depth
+
+
+def test_an_answer_with_merged_map_keys_is_read_and_marked():
+    value = transport(json.dumps('{1, [1 -> "a", true -> "b"]}')).eval("x")
+    assert moolit.unrepresentable(value) is not None
+
+
+def test_an_unreadable_answer_is_an_answer_error():
+    from terramoo.errors import AnswerError
+    with pytest.raises(AnswerError, match="cannot read the MOO's answer"):
+        transport(json.dumps("{1,")).eval("x")

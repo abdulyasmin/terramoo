@@ -119,7 +119,10 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
         try:
             value = moolit.parse(literal, dialect=dialect)
         except moolit.LiteralError as e:
-            raise MooError(f"tmoo_export returned {key} property {pname!r} with a malformed literal: {e}") from None
+            raise MooError(
+                f"tmoo_export returned {key} property {pname!r} with a malformed literal: {e}; "
+                f"add {pname!r} to ignore_props to leave it unmanaged"
+            ) from None
         obj.props.append(
             PropDef(
                 name=pname,

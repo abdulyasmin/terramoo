@@ -47,6 +47,27 @@ def setting_name(name):
     return name
 
 
+def setting_problem(name, value):
+    """Why `value` cannot be a setting's value in player.moo, or None."""
+    if name == "aliases" and (not isinstance(value, list) or any(not isinstance(v, str) or not v for v in value)):
+        return "aliases must be a list of nonempty strings"
+    if name == "gender" and not isinstance(value, str):
+        return "gender must be a string understood by the core"
+    if name == "home" and not isinstance(value, (Obj, Ref)):
+        return "home must be an object reference"
+    if name in {"linelen", "pagelen"} and type(value) is not int:
+        return f"{name} must be an integer"
+    if ":" in name:
+        # The core stores any true flag as 1 and drops a false one, so true,
+        # 2, 1.0 or "" could never be read back as written.
+        if type(value) in (bool, float) or type(value) is int and value not in (0, 1):
+            return (f"setting {name}: a core option stores a flag as 1 or 0, so write 1 or 0; "
+                    "other options take a string, an object or a list")
+        if isinstance(value, (str, list, dict)) and not value:
+            return f"setting {name}: the core drops an empty option, so write 0 to turn it off"
+    return None
+
+
 def feature_ref(value):
     if not isinstance(value, (Ref, Obj)) or isinstance(value, Ref) and value.kind == "@" and value.name.lower() == "me":
         raise MooError("a feature must be an object reference other than @me")
@@ -89,14 +110,9 @@ class PlayerDef:
                 raise MooError(f"player verb {verb.names}: invalid argument specification")
             add("verb", verb.names, verb)
         for name, value in self.settings.items():
-            if name == "aliases" and (not isinstance(value, list) or any(not isinstance(v, str) or not v for v in value)):
-                raise MooError("aliases must be a list of nonempty strings")
-            if name == "gender" and not isinstance(value, str):
-                raise MooError("gender must be a string understood by the core")
-            if name == "home" and not isinstance(value, (Obj, Ref)):
-                raise MooError("home must be an object reference")
-            if name in {"linelen", "pagelen"} and type(value) is not int:
-                raise MooError(f"{name} must be an integer")
+            problem = setting_problem(name, value)
+            if problem:
+                raise MooError(problem)
             add("setting", setting_name(name), value)
         for value in self.features:
             add("feature", feature_ref(value), True)

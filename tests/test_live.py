@@ -795,3 +795,41 @@ def test_round_trip(world, capsys):
     assert "is gone from the MOO" in out
     run(capsys, "apply", "-y")
     assert run(capsys, "plan").strip() == "no changes"
+
+
+NUMBERS = """\
+object tmoo_test_numbers
+  name: "tmoo test numbers"
+  parent: $thing
+
+  property count (flags: "rc") = 1;
+endobject
+"""
+
+
+def test_number_types_are_distinct_and_object_owners_are_only_noted(world, capsys):
+    import re
+    path = world.objects_dir / "tmoo_test_numbers.moo"
+    path.write_text(NUMBERS)
+    run(capsys, "apply", "-y")
+    assert run(capsys, "plan").strip() == "no changes"
+    obj = world.read_registry()["tmoo_test_numbers"]
+
+    # 1.0 is a different MOO value from 1: plan sees it, apply sets it, and
+    # the round trip converges.
+    floating = NUMBERS.replace("= 1;", "= 1.0;")
+    path.write_text(floating)
+    assert "setprop @tmoo_test_numbers.count" in run(capsys, "plan")
+    run(capsys, "apply", "-y")
+    assert world.eval(f"typeof({obj}.count) == typeof(1.0)") == 1
+    assert run(capsys, "plan").strip() == "no changes"
+    run(capsys, "pull")
+    assert path.read_text() == floating
+
+    # Apply never changes an object's owner, so a different one is a note.
+    path.write_text(floating.replace("  parent: $thing\n", "  parent: $thing\n  owner: #2\n"))
+    out = run(capsys, "plan")
+    assert re.search(r"tmoo_test_numbers: the file says owner (#2|\$\w+), but the MOO has @me", out)
+    assert out.rstrip().endswith("no changes")
+    assert run(capsys, "apply", "-y").rstrip().endswith("no changes")
+    assert world.eval(f"{obj}.owner") == world.player

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .moolit import Obj, Ref
+from .moolit import Obj, Ref, same
 
 
 @dataclass
@@ -21,6 +21,16 @@ class PropDef:
     perms: str = "rc"
     owner: Obj | Ref | None = None  # None: the player
     defined: bool = True  # False: an override of an inherited property
+
+    def __eq__(self, other):
+        # Not the generated ==: that would call a value of 1 equal to 1.0.
+        if other.__class__ is not self.__class__:
+            return NotImplemented
+        return (
+            (self.name, self.perms, self.owner, self.defined)
+            == (other.name, other.perms, other.owner, other.defined)
+            and same(self.value, other.value)
+        )
 
 
 @dataclass

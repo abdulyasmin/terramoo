@@ -20,6 +20,9 @@ file is what an agent needs to avoid breaking things.
 - **Keys, not object numbers, are identities.** A value read from the MOO
   resolves through the registry (`live=True`), a file's value through the
   pending creates first: see `Refs.resolve_ref`.
+- **Compare MOO values with `moolit.same`, never `==`.** Python calls 1, 1.0
+  and True equal; the MOO does not. Answers are parsed leniently and can hold
+  a value no file can (`moolit.unrepresentable`): check before writing one.
 - **Runtime state stays out of files.** Add such a property to
   `DEFAULT_IGNORE_PROPS` in `terramoo/world.py` (or a world's
   `ignore_props`); don't special-case it in plan.

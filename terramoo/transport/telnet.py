@@ -35,7 +35,7 @@ import string
 import time
 
 from .. import moolit
-from ..errors import MooError
+from ..errors import AnswerError, MooError
 from . import Transport
 
 _TAG = re.compile(r"~[A-Za-z0-9]{10}~[SBCDEXZ]")
@@ -386,9 +386,9 @@ class Telnet(Transport):
                 raise MooError(text) from None
             raise MooError(f"{code}: {msg}")
         try:
-            return moolit.parse(text, dialect=self.literal_dialect)
+            return moolit.parse(text, dialect=self.literal_dialect, max_depth=moolit.ANSWER_DEPTH, strict_keys=False)
         except moolit.LiteralError as e:
-            raise MooError(f"cannot read the MOO's answer ({e}): {text[:200]}") from None
+            raise AnswerError(f"cannot read the MOO's answer ({e}): {text[:200]}") from None
 
     @staticmethod
     def _context(lines: list[str]) -> str:

@@ -377,3 +377,34 @@ def test_lambdamoo_telnet_rejects_string_bytes_the_server_would_drop(monkeypatch
         t.eval(t.serialize(value))
 
     assert len(fake.received) == before
+
+
+def test_an_answer_may_wrap_a_value_nested_to_the_limit(monkeypatch):
+    depth = moolit.MAX_DEPTH + 3
+    literal = "{" * depth + "}" * depth
+    t = client(monkeypatch, FakeMoo(answer(literal)))
+    assert moolit.nesting(t.eval("anything")) == depth
+
+
+def test_an_answer_with_merged_map_keys_is_read_and_marked(monkeypatch):
+    t = client(monkeypatch, FakeMoo(answer('{1, [1 -> "a", 1.0 -> "b"]}')))
+    value = t.eval("anything")
+    assert moolit.unrepresentable(value) is not None
+
+
+def test_an_unreadable_answer_is_an_answer_error(monkeypatch):
+    from terramoo.errors import AnswerError
+    depth = moolit.ANSWER_DEPTH + 1
+    deep = "{" * depth + "}" * depth
+
+    def reply(tag, line):
+        if tag is None:
+            return ["*** Connected ***"]
+        if is_sentinel(tag, line):
+            return [tag + "Z"]
+        result = "1" if "_r = (player)" in line else deep
+        return [tag + "S", tag + "B" + str(len(result)), tag + "C2", tag + "D" + result, tag + "E"]
+
+    t = client(monkeypatch, FakeMoo(reply))
+    with pytest.raises(AnswerError, match="cannot read the MOO's answer"):
+        t.eval("anything")

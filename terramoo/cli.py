@@ -10,6 +10,7 @@ import getpass
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -352,7 +353,15 @@ def _adopt_locked(w: World, args) -> None:
         print(f"  {actual} = {obj}")
         export_keys.append(actual)
     if export_keys:
-        _write_exports(w, refs, export_keys, keep_existing=verify, **({"into": args.into} if getattr(args, "into", None) else {}))
+        try:
+            _write_exports(w, refs, export_keys, keep_existing=verify, **({"into": args.into} if getattr(args, "into", None) else {}))
+        except MooError as e:
+            # The registrations stand; a later pull writes the files.
+            w.save_state(refs.snapshot())
+            into = f" --into {shlex.quote(args.into)}" if getattr(args, "into", None) else ""
+            retry = "run this adopt again" if verify else f"run `tmoo pull {' '.join(export_keys)}{into}`"
+            raise MooError(f"registered {', '.join(export_keys)} but wrote no files: {e}; "
+                           f"then {retry} to write them") from None
     w.save_state(refs.snapshot())
     if problems:
         raise MooError(f"adoption failed: {'; '.join(problems)}")
@@ -1054,6 +1063,8 @@ def parse_object_arg(text: str) -> Obj:
 def _plan(w: World):
     refs = w.refs()
     files = w.load_files()
+    # As in a world with modules: a file may not set a property export ignores.
+    deployment.validate_properties(w, files)
     live = export_mod.export(
         w,
         refs,
@@ -1072,10 +1083,16 @@ def _print_plan(p: plan_mod.Plan, destroy: bool):
         print(f"  - {'recycle' if destroy else 'orphan (no file; --destroy recycles)'} {key}")
     for warning in p.warnings:
         print(f"  ? {warning}")
+    _print_notes(p)
     for prob in p.problems:
         print(f"  ! {prob}")
     if p.unchanged:
         print(f"  = {len(p.unchanged)} unchanged")
+
+
+def _print_notes(p: plan_mod.Plan):
+    for note in p.notes:
+        print(f"  ? {note}")
 
 
 def cmd_plan(args):
@@ -1088,6 +1105,7 @@ def cmd_plan(args):
         else:
             _, _, p = _plan(w)
     if p.empty and not p.problems and not p.warnings:
+        _print_notes(p)
         print("no changes")
         return
     _print_plan(p, args.destroy)
@@ -1125,6 +1143,7 @@ def _apply_locked(w: World, args) -> None:
         _print_plan(p, args.destroy)
         raise MooError("fix the problems above first")
     if p.empty:
+        _print_notes(p)
         print("no changes")
         w.save_state(refs.snapshot())
         return
@@ -1306,8 +1325,9 @@ def cmd_player(args):
             print(f"selected fields: {len(player_mod.load(w).entries())}")
             state = player_mod.remote(w)
             print(f"player revision {state[2]} ({state[5]})")
-            if state[5] == "running" and state[6]:
-                print(f"callback task {state[6][0]}; wait for it to finish before recovery")
+            task = player_mod.running_task(w) if state[5] == "running" else None
+            if task is not None:
+                print(f"callback task {task}; wait for it to finish before recovery")
             if state[3] or player_mod.paths(w)[2].exists():
                 print("unfinished player operation; run player recover in its checkout")
         elif args.action in {"track", "pull"}:
@@ -1332,10 +1352,14 @@ def cmd_player(args):
                 live = playerdef.PlayerDef()
                 refs = w.refs()
                 for item in prepared.fields:
+                    if player_mod.unwritable(item["kind"], item["name"], item["before"]):
+                        continue  # prepare reports it among the problems below
                     player_mod.accept(live, item["kind"], item["name"], item["before"], refs)
                 diff = list(difflib.unified_diff(playerdef.render(live).splitlines(True),
                     playerdef.render(prepared.profile).splitlines(True), fromfile="moo/player.moo", tofile="files/player.moo"))
                 sys.stdout.writelines(diff or ["no player differences\n"])
+                for problem in prepared.problems:
+                    print(f"  ! {problem}")
             else:
                 print(player_mod.describe(prepared))
             if prepared.problems:

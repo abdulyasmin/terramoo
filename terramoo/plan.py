@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import ObjectDef, PropDef, normalize
-from .moolit import Obj, Ref, walk
+from .model import ObjectDef, PropDef, VerbDef, normalize
+from .moolit import Obj, Ref, same, walk
 from .refs import Refs, UnresolvedRef
 
 
@@ -23,6 +23,8 @@ class Plan:
     ops: list[tuple] = field(default_factory=list)
     destroys: dict[str, Obj] = field(default_factory=dict)  # orphan bindings at planning time
     warnings: list[str] = field(default_factory=list)
+    # Information for the reader that never gives apply anything to do.
+    notes: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
 
@@ -133,6 +135,9 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         except (UnresolvedRef, ValueError) as e:
             plan.problems.append(f"{key}: {e}")
             continue
+        note = _owner_note(key, obj, current, refs)
+        if note:
+            plan.notes.append(note)
         if ops:
             plan.ops.extend(ops)
         elif current is not None:
@@ -147,6 +152,37 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     if plan.ops or plan.creates:
         plan.ops.append(("link", [Ref("@", target_for(k)) for k in wanted]))
     return plan
+
+
+def _owner_note(key: str, want: ObjectDef, have: ObjectDef | None, refs: Refs) -> str | None:
+    """Say when the file's object owner differs from the one the object has
+    or will have.  Only a wizard may change an object's owner, so apply never
+    does; a new object is owned by the player who creates it."""
+    def shown(owner):
+        return refs.symbolize_obj(owner)
+
+    try:
+        wanted = _owner(refs, want.owner)
+    except UnresolvedRef as e:
+        return f"{key}: the file's owner cannot be resolved ({e.args[0]}); apply never changes an object's owner"
+    if have is None:
+        if wanted == refs.player:
+            return None
+        return (f"{key}: the file says owner {shown(wanted)}, but a new object is owned by "
+                f"{shown(refs.player)}; apply never changes an object's owner")
+    try:
+        actual = _owner(refs, have.owner, live=True)
+    except UnresolvedRef:
+        actual = have.owner
+    if wanted == actual:
+        return None
+    live = shown(actual)
+    if isinstance(live, Ref) and live.kind == "@" and live.name.lower() in {k.lower() for k in refs.pending}:
+        # The owner is the old object of a key apply is about to recreate.
+        return (f"{key}: the file says owner {shown(wanted)}, but the MOO has {actual}, the old object of "
+                f"{live}, which apply recreates as a new object; apply never changes an object's owner")
+    return (f"{key}: the file says owner {shown(wanted)}, but the MOO has {live}; "
+            "apply never changes an object's owner")
 
 
 def _folded_names(values, label: str) -> dict[str, str]:
@@ -319,7 +355,7 @@ def diff_object(
                     ops.append(("propinfo", target, cur.name, [owner, perms, p.name]))
                     prop_name = p.name
                 if (
-                    value != refs.resolve(cur.value, live=True)
+                    not same(value, refs.resolve(cur.value, live=True))
                     or was_exit != will_exit
                     and cur.name.lower() in ("source", "dest")
                 ):
@@ -330,7 +366,7 @@ def diff_object(
                 raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
             if (
                 cur is None
-                or value != refs.resolve(cur.value, live=True)
+                or not same(value, refs.resolve(cur.value, live=True))
                 or was_exit != will_exit
                 and cur.name.lower() in ("source", "dest")
             ):

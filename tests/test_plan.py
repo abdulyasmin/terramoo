@@ -1,4 +1,6 @@
-from terramoo import plan
+import pytest
+
+from terramoo import moolit, plan
 from terramoo.model import ObjectDef, PropDef, VerbDef
 from terramoo.moolit import Map, Obj, Ref
 from terramoo.refs import Refs
@@ -349,3 +351,102 @@ def test_parent_cycle_is_a_problem_not_a_crash():
     ]
     assert [c[0] for c in p.creates] == ["hall"]
     assert all(op[1] == Ref("@", "hall") for op in p.ops if op[0] != "link")
+
+
+@pytest.mark.parametrize(
+    "file_value, live_value",
+    [
+        (1.0, 1),
+        (1, 1.0),
+        (True, 1),
+        (1, True),
+        ("Hall", "hall"),
+        ([1.0], [1]),
+        (Map({1.0: "x"}), Map({1: "x"})),
+    ],
+)
+@pytest.mark.parametrize("defined", [True, False])
+def test_a_value_of_another_moo_type_is_a_change(file_value, live_value, defined):
+    # Python's == would call each pair equal and plan nothing; a later pull
+    # would then rewrite the file with the live value.
+    r = refs(hall=200)
+    want = room(props=[PropDef("v", file_value, defined=defined)])
+    have = room(props=[PropDef("v", live_value, defined=defined)])
+
+    ops = plan.diff_object("hall", want, have, r)
+
+    assert [op[:3] for op in ops] == [("setprop", Ref("@", "hall"), "v")]
+    assert moolit.same(ops[0][3], file_value)
+
+
+@pytest.mark.parametrize("value", [1, 1.5, True, [1, 2.0], Map({"k": 1})])
+def test_a_value_of_the_same_moo_type_needs_nothing(value):
+    r = refs(hall=200)
+    want = room(props=[PropDef("v", value, defined=False)])
+    have = room(props=[PropDef("v", moolit.parse(moolit.serialize(value)), defined=False)])
+    assert plan.diff_object("hall", want, have, r) == []
+
+
+def test_an_owner_apply_cannot_set_is_a_note_not_an_op():
+    r = refs(hall=200)
+
+    pending = plan.build({"hall": room(owner=Obj(99))}, {"hall": room()}, r)
+
+    assert pending.empty and not pending.problems and not pending.warnings
+    assert pending.notes == [
+        "hall: the file says owner #99, but the MOO has @me; apply never changes an object's owner"
+    ]
+
+
+def test_a_live_owner_that_is_not_the_player_is_noted():
+    r = refs(hall=200)
+
+    pending = plan.build({"hall": room()}, {"hall": room(owner=Obj(50))}, r)
+
+    assert pending.notes == [
+        "hall: the file says owner @me, but the MOO has #50; apply never changes an object's owner"
+    ]
+
+
+def test_a_new_object_is_owned_by_the_player_whatever_the_file_says():
+    r = refs()
+
+    pending = plan.build({"hall": room(owner=Ref("$", "room"))}, {}, r)
+
+    assert [key for key, _, _ in pending.creates] == ["hall"]
+    assert pending.notes == [
+        "hall: the file says owner $room, but a new object is owned by @me; apply never changes an object's owner"
+    ]
+
+
+@pytest.mark.parametrize("owner", [None, Ref("@", "me"), ME])
+def test_an_owner_that_matches_has_no_note(owner):
+    assert plan.build({"hall": room(owner=owner)}, {"hall": room()}, refs(hall=200)).notes == []
+    assert plan.build({"hall": room(owner=owner)}, {}, refs()).notes == []
+
+
+def test_an_unresolvable_owner_is_noted_without_blocking_other_changes():
+    r = refs(hall=200)
+
+    pending = plan.build({"hall": room(name="Great Hall", owner=Ref("$", "nowhere"))}, {"hall": room()}, r)
+
+    assert not pending.problems
+    assert kinds(pending.ops) == ["name", "link"]
+    assert pending.notes == [
+        "hall: the file's owner cannot be resolved ($nowhere is not a corified object on this MOO); "
+        "apply never changes an object's owner"
+    ]
+
+
+def test_an_owner_being_recreated_is_named_by_its_old_number():
+    r = refs(hall=200, keeper=201)
+    files = {"hall": room(owner=Ref("@", "keeper")), "keeper": room(key="keeper", name="Keeper")}
+    live = {"hall": room(owner=Ref("@", "keeper")), "keeper": None}
+
+    pending = plan.build(files, live, r)
+
+    assert [key for key, _, _ in pending.creates] == ["keeper"]
+    assert pending.notes == [
+        "hall: the file says owner @keeper, but the MOO has #201, the old object of @keeper, "
+        "which apply recreates as a new object; apply never changes an object's owner"
+    ]

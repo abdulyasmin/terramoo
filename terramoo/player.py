@@ -2,11 +2,12 @@
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import shlex
 from uuid import uuid4
 
 from . import moolit, playerdef
 from .catalog import safe_path, read_snapshot
-from .errors import MooError
+from .errors import AnswerError, MooError
 from .model import PropDef, VerbDef, normalize
 from .moolit import Obj, Ref, walk
 from .ownership import identity
@@ -23,7 +24,11 @@ def literal(value):
 
 
 def unliteral(value):
-    return moolit.parse(value, dialect=moolit.MOOR)
+    """A value from the player receipt or journal, which wraps it in lists."""
+    try:
+        return moolit.parse(value, dialect=moolit.MOOR, max_depth=moolit.ANSWER_DEPTH)
+    except moolit.LiteralError as e:
+        raise MooError(f"unreadable value in the player receipt or journal: {e}") from None
 
 
 def resolve(refs, value):
@@ -33,20 +38,39 @@ def resolve(refs, value):
         raise MooError(f"player reference cannot be resolved: {e}") from None
 
 
-def call(world, helper, *args):
+def call(world, helper, *args, index=""):
+    """Call a toolbox helper.  `index`, such as "[1..6]", is applied in the
+    MOO, so only that part of the answer has to be read."""
     world.require_helper_version()
-    return world.eval(world.helper(helper, *(world.transport.serialize(a) for a in args)))
+    return world.eval(world.helper(helper, *(world.transport.serialize(a) for a in args)) + index)
+
+
+# The toolbox keeps {1, world, revision, token, step, status, result}. The
+# result holds a field's row, which can hold a value terramoo cannot read,
+# such as a cleared property's inherited value.  So the header is read on its
+# own, and the result only where an operation's outcome needs it.
+HEADER = "[1..6]"
+RESULT = "[7]"
 
 
 def remote(world):
-    state = call(world, "tmoo_player", "read")
-    if (not isinstance(state, list) or len(state) != 7 or state[0] != 1
+    """The player deployment state's header: the first six fields."""
+    state = call(world, "tmoo_player", "read", index=HEADER)
+    if (not isinstance(state, list) or len(state) != 6 or state[0] != 1
             or not isinstance(state[1], str) or type(state[2]) is not int or state[2] < 0
             or not isinstance(state[3], str) or type(state[4]) is not int
-            or state[5] not in {"idle", "ready", "running", "done", "failed", "finished"}
-            or not isinstance(state[6], list)):
+            or state[5] not in {"idle", "ready", "running", "done", "failed", "finished"}):
         raise MooError("malformed player deployment state")
     return state
+
+
+def recorded(world):
+    """The last field operation's result: {1, row}, {0, error, message}, or
+    {task} while it runs.  Raises AnswerError when the row cannot be read."""
+    result = call(world, "tmoo_player", "read", index=RESULT)
+    if not isinstance(result, list):
+        raise MooError("malformed player operation result")
+    return result
 
 
 def load(world):
@@ -69,10 +93,8 @@ def receipt(world):
     for key, record in data["fields"].items():
         if not isinstance(record, dict) or not isinstance(record.get("snapshot"), str):
             raise MooError(f"invalid player field receipt: {key}")
-        try:
-            unliteral(record["snapshot"])
-        except ValueError as e:
-            raise MooError(f"invalid player snapshot: {key}: {e}") from None
+    # Snapshots are parsed where they are used, so one that cannot be read
+    # stops only its own field, and untrack can still drop it.
     return data
 
 
@@ -85,7 +107,7 @@ def check_revision(data, state, *, refresh=False):
         raise MooError("stale player receipt; inspect and pull the live player changes first")
 
 
-def read_field(world, selector):
+def read_field(world, selector, *, remedy=None):
     if selector[0] == "setting" and ":" in selector[1]:
         prefix, option = playerdef.setting_name(selector[1]).split(":", 1)
         # LambdaCore publishes separate option objects; ToastCore groups them
@@ -99,7 +121,11 @@ def read_field(world, selector):
         names = world.eval(f"{package}.names")
         if not isinstance(names, list) or option.lower() not in {str(n).lower() for n in names}:
             raise MooError(f"unsupported player option {selector[1]!r}; select a canonical option name")
-    row = call(world, "tmoo_player_read", "field", selector)
+    try:
+        row = call(world, "tmoo_player_read", "field", selector)
+    except AnswerError as e:
+        raise AnswerError(f"player {selector[0]} {selector[1]}: the live value cannot be read ({e}); "
+                          f"{remedy or _remedy(world, selector[0], selector[1])}") from None
     kind = selector[0]
     valid = isinstance(row, list) and row == [0]
     if isinstance(row, list) and row and row[0] == 1:
@@ -120,6 +146,38 @@ def read_field(world, selector):
     return row
 
 
+def _untrack_hint(kind, name):
+    if kind in {"property", "setting", "verb"} and isinstance(name, str):
+        return f"tmoo player untrack --{kind} {shlex.quote(name)}"
+    return "tmoo player untrack"
+
+
+def _remedy(world, kind, name):
+    if paths(world)[2].exists():
+        # untrack waits for the operation, so it cannot help here.
+        return "finish the operation with tmoo player recover --accept-live, which stops tracking it"
+    return f"stop managing it with {_untrack_hint(kind, name)}"
+
+
+def unwritable(kind, name, row):
+    """Why a live property or setting cannot be written to player.moo, or None.
+
+    Answers are read leniently, so a live value can be compared even when
+    player.moo could not hold it.  A cleared property's inherited value is
+    never written, so it does not count."""
+    if not row[0]:
+        return None
+    if kind == "property" and not row[2]:
+        return moolit.unrepresentable(row[5])
+    if kind == "setting":
+        problem = moolit.unrepresentable(row[1])
+        if problem:
+            return problem
+        rule = playerdef.setting_problem(name, row[1])
+        return f"breaks a player.moo rule ({rule})" if rule else None
+    return None
+
+
 def selectors(args):
     selected = []
     for kind in ("property", "verb", "setting", "feature"):
@@ -130,7 +188,7 @@ def selectors(args):
                 name = playerdef.setting_name(name.lower())
             elif kind == "feature":
                 try:
-                    name = playerdef.feature_ref(unliteral(name))
+                    name = playerdef.feature_ref(moolit.parse(name, dialect=moolit.MOOR))
                 except ValueError as e:
                     raise MooError(f"invalid feature reference: {e}") from None
             else:
@@ -151,6 +209,10 @@ def forget(profile, kind, name):
 
 
 def accept(profile, kind, name, row, refs):
+    reason = unwritable(kind, name, row)
+    if reason:
+        raise MooError(f"player {kind} {name}: the live value {reason}, so it cannot be written to player.moo; "
+                       f"stop managing it with {_untrack_hint(kind, name)}")
     forget(profile, kind, name)
     if row == [0]:
         return
@@ -261,10 +323,10 @@ def satisfied(kind, name, row, action):
     if not row[0]:
         return False
     if kind == "property":
-        return row[1] == action[1] and not row[2] and row[5] == action[2] and (not row[1] or normalize(row[4], "rwc") == action[3])
+        return row[1] == action[1] and not row[2] and moolit.same(row[5], action[2]) and (not row[1] or normalize(row[4], "rwc") == action[3])
     if kind == "verb":
-        return row[4] == name and normalize(row[3], "rwxd") == action[1] and row[5:] == action[2:]
-    return row[1] == action[1]
+        return row[4] == name and normalize(row[3], "rwxd") == action[1] and moolit.same(row[5:], action[2:])
+    return moolit.same(row[1], action[1])
 
 
 @dataclass
@@ -323,15 +385,37 @@ def prepare(world):
         row = read_field(world, selector)
         removal = profile.removals.get(key)
         action = [removal[0]] if removal else action_for(kind, value, refs)
+        reason = unwritable(kind, name, row)
+        untrack = _untrack_hint(kind, name)
+        if reason and action[0] == "set":
+            prepared.problems.append(f"{key}: the live value {reason}; stop managing it with {untrack}")
+            continue
         record = data["fields"].get(key)
-        baseline = unliteral(record["snapshot"]) if record else None
+        try:
+            baseline = unliteral(record["snapshot"]) if record else None
+        except MooError as e:
+            prepared.problems.append(f"{key}: its receipt snapshot cannot be read ({e}); "
+                                     f"stop managing it with {untrack}, then track it again")
+            continue
         matches = satisfied(kind, name, row, action)
         fresh = row == [0] and kind in {"property", "verb"} or kind == "feature" and row == [1, 0]
         if baseline is None and (removal or not fresh):
             prepared.problems.append(f"{key}: track the existing field before managing it")
-        elif baseline is not None and row != baseline and not matches:
-            prepared.problems.append(f"{key}: live drift conflicts with the file; inspect and pull before editing")
+        elif baseline is not None and not moolit.same(row, baseline) and not matches:
+            if reason:
+                prepared.problems.append(f"{key}: live drift conflicts with the file, and the live value {reason}; "
+                                         f"change it on the MOO, or stop managing it with {untrack}")
+            else:
+                prepared.problems.append(f"{key}: live drift conflicts with the file; inspect and pull before editing")
         if not matches:
+            merge = moolit.merged_keys(row)
+            if merge:
+                # The helpers check the exact live row, and this one lost a key.
+                prepared.problems.append(
+                    f"{key}: the live value has the map keys {moolit.serialize(merge[0])} and "
+                    f"{moolit.serialize(merge[1])}, which terramoo cannot send back exactly, so it cannot change "
+                    f"this field; change it on the MOO, or stop managing it with {untrack}")
+                continue
             try:
                 call(world, "tmoo_player_write", "check", selector, row, action)
             except MooError as e:
@@ -381,10 +465,10 @@ def _finish(world, intent, *, accept_live=False):
             continue
         row = read_field(world, unliteral(item["selector"]))
         after = unliteral(item["after"])
-        same = row == after
+        unchanged = moolit.same(row, after)
         if item["kind"] == "verb" and row[0] and after[0]:
-            same = row[2:] == after[2:]  # Our deletions can shift surviving descriptors.
-        if not same:
+            unchanged = moolit.same(row[2:], after[2:])  # Our deletions can shift surviving descriptors.
+        if not unchanged:
             raise MooError(f"{item['key']}: changed after its operation; inspect then player recover --accept-live")
         if item["key"] in intent["data"]["fields"]:
             intent["data"]["fields"][item["key"]]["snapshot"] = literal(row)
@@ -403,7 +487,7 @@ def _finish(world, intent, *, accept_live=False):
     _save_intent(world, intent)
     state = remote(world)
     if state[3]:
-        call(world, "tmoo_player", "finish", intent["token"], int(intent["accept_live"]))
+        call(world, "tmoo_player", "finish", intent["token"], int(intent["accept_live"]), index=HEADER)
     elif state[2] != intent["data"]["revision"]:
         raise MooError("player revision changed during recovery")
     definition = paths(world)[0]
@@ -431,24 +515,33 @@ def apply(prepared):
               "fields": [_encode_field(f) for f in prepared.fields], "completed": 0, "sending": None}
     _save_intent(world, intent)
     call(world, "tmoo_player", "begin", data["world_id"], prepared.state[2], token,
-         prepared.registry_revision, prepared.package_epoch)
+         prepared.registry_revision, prepared.package_epoch, index=HEADER)
     intent["phase"] = "active"
     _save_intent(world, intent)
     step = 0
     for i, item in enumerate(intent["fields"]):
         verify(world, prepared.snapshots)
         selector, action, expected = (unliteral(item[k]) for k in ("selector", "action", "before"))
-        row = read_field(world, selector)
-        if row != expected:
+        # Nothing was sent for this field yet, so a plain recover keeps every edit.
+        row = read_field(world, selector, remedy=(
+            "run tmoo player recover, which keeps your other edits, then stop managing it with "
+            f"{_untrack_hint(selector[0], selector[1])}"))
+        if not moolit.same(row, expected):
             raise MooError(f"{item['key']}: changed after planning; run player recover")
         if item["change"]:
             step += 1
             intent.update(sending={"index": i, "step": step}, phase="sending")
             _save_intent(world, intent)
-            state = call(world, "tmoo_player", "apply", token, step, selector, expected, action, prepared.bindings)
-            if state[5] != "done" or state[6][0] != 1:
-                raise MooError(f"{item['key']}: player operation failed; run player recover: {state[6]}")
-            row = state[6][1]
+            state = call(world, "tmoo_player", "apply", token, step, selector, expected, action, prepared.bindings,
+                         index=HEADER)
+            try:
+                result = recorded(world)
+            except AnswerError as e:
+                raise MooError(f"{item['key']}: the operation's result cannot be read ({e}); "
+                               "run tmoo player recover") from None
+            if state[5] != "done" or not result or result[0] != 1:
+                raise MooError(f"{item['key']}: player operation failed; run player recover: {result}")
+            row = result[1]
         _record_success(profile, data, item, row)
         intent.update(completed=i + 1, sending=None, phase="active", profile=playerdef.render(profile))
         _save_intent(world, intent)
@@ -488,33 +581,83 @@ def recover(world, *, accept_live=False):
     if accept_live:
         profile = playerdef.parse(intent["profile"])
         refs = world.refs()
+        dropped = []
         for item in intent["fields"]:
-            row = read_field(world, unliteral(item["selector"]))
-            accept(profile, item["kind"], unliteral(item["name"]), row, refs)
-            intent["data"]["fields"][item["key"]] = {"snapshot": literal(row)}
+            name = unliteral(item["name"])
+            try:
+                row = read_field(world, unliteral(item["selector"]))
+            except AnswerError:
+                # Nothing to compare later, so _finish skips it.
+                forget(profile, item["kind"], name)
+                intent["data"]["fields"].pop(item["key"], None)
+                dropped.append(f"{item['key']} (its live value cannot be read)")
+                item.pop("after", None)
+                continue
+            reason = unwritable(item["kind"], name, row)
+            if reason:
+                # The escape hatch must finish: stop tracking what cannot be written.
+                forget(profile, item["kind"], name)
+                intent["data"]["fields"].pop(item["key"], None)
+                dropped.append(f"{item['key']} (its live value {reason})")
+            else:
+                accept(profile, item["kind"], name, row, refs)
+                intent["data"]["fields"][item["key"]] = {"snapshot": literal(row)}
             item["after"] = literal(row)
         intent["profile"] = playerdef.render(profile)
         _finish(world, intent, accept_live=True)
-        return "accepted inspected player state without replaying callbacks; run player plan"
+        message = "accepted inspected player state without replaying callbacks; run player plan"
+        return message + (f"; stopped tracking {', '.join(dropped)}" if dropped else "")
     if intent["phase"] == "finishing":
         _finish(world, intent, accept_live=accept_live)
         return "finished player receipt transaction"
     profile = playerdef.parse(intent["profile"])
     sending = intent["sending"]
+    dropped = []
     if state[5] in {"running", "failed"} and not accept_live:
         raise MooError("callback outcome is uncertain; inspect the player, then use player recover --accept-live; callbacks are never replayed")
     if sending:
         item = intent["fields"][sending["index"]]
-        row = read_field(world, unliteral(item["selector"]))
         if state[4] == sending["step"] and state[5] == "done":
-            if row != state[6][1]:
-                raise MooError("player changed after the recorded result; inspect then recover --accept-live")
-            _record_success(profile, intent["data"], item, row)
+            # The step ran.  Its recorded row is checked against the live field,
+            # unless that row cannot be read; then the live field must satisfy the
+            # request, which _record_success checks either way.
+            try:
+                result = recorded(world)
+            except AnswerError:
+                result = None
+            try:
+                row = read_field(world, unliteral(item["selector"]))
+            except AnswerError:
+                if result is not None:
+                    raise
+                row = None
+            if row is None:
+                # Neither row can be read: the step is done, but stop tracking this field.
+                forget(profile, item["kind"], unliteral(item["name"]))
+                intent["data"]["fields"].pop(item["key"], None)
+                dropped.append(f"{item['key']} (its live value cannot be read)")
+            else:
+                if result is not None and not moolit.same(row, result[1]):
+                    raise MooError("player changed after the recorded result; inspect then recover --accept-live")
+                _record_success(profile, intent["data"], item, row)
         elif state[4] >= sending["step"]:
             raise MooError("player operation outcome requires explicit inspection")
     intent["profile"] = playerdef.render(profile)
     _finish(world, intent, accept_live=accept_live)
-    return "reconciled player operation without replaying callbacks; run player plan"
+    message = "reconciled player operation without replaying callbacks; run player plan"
+    return message + (f"; stopped tracking {', '.join(dropped)}" if dropped else "")
+
+
+def running_task(world):
+    """The task id of a field operation's callback that is still running, or None."""
+    if remote(world)[5] != "running":
+        return None
+    try:
+        result = recorded(world)
+    except MooError:
+        return None
+    # The callback may have finished between the two reads.
+    return result[0] if len(result) == 1 and type(result[0]) is int else None
 
 
 def incoming_check(world, refs, candidates):
@@ -534,6 +677,12 @@ def incoming_check(world, refs, candidates):
         if not row[0]:
             continue
         value = row[5] if kind == "property" else row[1]
+        merge = moolit.merged_keys(value)
+        if merge:
+            # A lost map entry could hold a reference; a deep value is complete.
+            raise MooError(f"live player {kind} {name}: the value has the map keys {moolit.serialize(merge[0])} and "
+                           f"{moolit.serialize(merge[1])}, which terramoo cannot keep apart, so its references cannot "
+                           f"be checked before removal; stop managing it with {_untrack_hint(kind, name)}")
         hits = []
         walk(value, lambda v: hits.append(v) or v if isinstance(v, Obj) and v in targets else v)
         if hits:

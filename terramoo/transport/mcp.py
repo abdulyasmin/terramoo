@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 
 from .. import moolit
-from ..errors import MooError
+from ..errors import AnswerError, MooError
 from . import Transport
 
 _TAGGED = re.compile(r"(.*\S)\s+\((?:OBJ|ERR|ANON|WAIF|STR)\)", re.S)
@@ -113,9 +113,9 @@ class McpTransport(Transport):
         if not isinstance(literal, str):
             raise MooError(f"eval returned something that is not a toliteral() string: {text[:200]}")
         try:
-            return moolit.parse(literal, dialect=self.literal_dialect)
+            return moolit.parse(literal, dialect=self.literal_dialect, max_depth=moolit.ANSWER_DEPTH, strict_keys=False)
         except moolit.LiteralError as e:
-            raise MooError(f"cannot read the MOO's answer ({e}): {literal[:200]}") from None
+            raise AnswerError(f"cannot read the MOO's answer ({e}): {literal[:200]}") from None
 
     def set_prop(self, obj, name: str, value) -> None:
         if not self.set_prop_tool:

@@ -85,7 +85,8 @@ def validate_properties(world, files):
     for key, obj in files.items():
         ignored = [p.name for p in obj.props if p.name.lower() in world.ignore_props]
         if ignored:
-            raise MooError(f"{key}: desired runtime properties are excluded by ignore_props: {', '.join(ignored)}")
+            raise MooError(f"{key}: desired runtime properties are excluded by ignore_props: {', '.join(ignored)}; "
+                           f"remove them from the file (for an existing object, `tmoo pull {key}` does that)")
 
 
 def snapshot(world):

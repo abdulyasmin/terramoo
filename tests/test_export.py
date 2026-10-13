@@ -310,3 +310,24 @@ def test_slug_returns_an_ascii_key_that_round_trips_through_objdef(name, expecte
     assert key == expected
     assert key.isascii()
     assert objdef.parse(rendered).key == key
+
+
+def test_export_reports_a_too_deeply_nested_property_without_a_traceback():
+    obj = Obj(10)
+    deep = "{" * (moolit.MAX_DEPTH + 1) + "}" * (moolit.MAX_DEPTH + 1)
+    record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["deep", 1, Obj(1), "rc", deep]], []]
+    world = ExportWorld({obj: record})
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    with pytest.raises(MooError, match=r"hall property 'deep'.*levels deep; add 'deep' to ignore_props to leave it unmanaged$"):
+        export_mod.export(world, refs, ["hall"])
+
+
+def test_export_refuses_a_map_whose_keys_python_would_merge():
+    obj = Obj(10)
+    record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["m", 1, Obj(1), "rc", '[1 -> "a", 1.0 -> "b"]']], []]
+    world = ExportWorld({obj: record})
+    refs = Refs(player=Obj(1), registry={"hall": obj})
+
+    with pytest.raises(MooError, match=r"hall property 'm'.*cannot keep apart; add 'm' to ignore_props to leave it unmanaged$"):
+        export_mod.export(world, refs, ["hall"])
