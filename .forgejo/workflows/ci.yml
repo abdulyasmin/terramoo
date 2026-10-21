@@ -1,0 +1,19 @@
+# Lint, test and secret gate through the shared workflows. This repo is
+# canonical here; GitHub receives a push mirror and runs nothing.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    uses: abdulyasmin/workflows/.forgejo/workflows/python-uv.yml@main
+  gitleaks:
+    uses: abdulyasmin/workflows/.forgejo/workflows/gitleaks.yml@main
