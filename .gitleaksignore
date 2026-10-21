@@ -1,0 +1,3 @@
+# Reviewed gitleaks findings (fingerprint = commit:file:rule:line). A keyword
+# argument named allow_replacements, not a key.
+2b405027109b6bc74c6c9c6b10bdc0a1ec886823:terramoo/updates.py:generic-api-key:344
