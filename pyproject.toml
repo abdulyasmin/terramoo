@@ -23,3 +23,21 @@ packages = ["terramoo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Findings present when CI started gating on ruff; remove an entry once its
+# findings are fixed.
+ignore = [
+    "B018",    # useless expression
+    "PERF102", # dict keys()/values()
+    "PLW1510", # subprocess.run without check
+    "B023",   # closures over loop variables
+    "BLE001", # blind except
+    "C401",   # set comprehension
+    "C408",   # dict() call
+    "PIE810", # startswith tuple
+    "RUF009", # function call in dataclass default
+    "RUF059", # unused unpacked variable
+    "SIM102", # collapsible if
+    "SIM117", # nested with statements
+]
