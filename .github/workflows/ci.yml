@@ -1,0 +1,45 @@
+# Lint, test and secret gate on GitHub, where this repo is canonical (the
+# Forgejo copy is a pull mirror and runs no Actions). The same gates as the
+# Forgejo repos' python-uv workflow, with the same pins.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: docker.io/library/python:3.12.15-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.17"
+      - run: uv sync --locked
+      - run: uvx ruff@0.17.1 check .
+      - run: uvx ruff@0.17.1 format --check .
+      - run: uv run --no-sync pytest
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+      - run: gitleaks git --no-banner --redact --exit-code 1 .
