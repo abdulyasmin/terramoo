@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from . import apply, export, objdef, plan
 from .errors import MooError
 from .modules import components, references
-from .ownership import owner_for, read_remote, operation_path
+from .ownership import operation_path, owner_for, read_remote
 from .storage import atomic_write, json_text
-from uuid import uuid4
 
 
 def definitions(prepared):
@@ -25,12 +26,20 @@ def incoming_check(prepared, candidates):
     refs = prepared.refs
     refs.replace_registry(prepared.world.read_registry())
     from .player import incoming_check as player_incoming
+
     player_incoming(prepared.world, refs, candidates)
     survivors = [key for key in refs.registry if key.lower() not in candidates]
     live = export.export(prepared.world, refs, survivors)
-    for key, obj in [*prepared.files.items(), *((k, v) for k, v in live.items() if v is not None)]:
-        if key.lower() not in candidates and (incoming := references(obj, refs) & candidates):
-            raise MooError(f"cannot remove {sorted(incoming)}: surviving managed object {key} still refers to it")
+    for key, obj in [
+        *prepared.files.items(),
+        *((k, v) for k, v in live.items() if v is not None),
+    ]:
+        if key.lower() not in candidates and (
+            incoming := references(obj, refs) & candidates
+        ):
+            raise MooError(
+                f"cannot remove {sorted(incoming)}: surviving managed object {key} still refers to it"
+            )
 
 
 def retire(prepared, session, removed):
@@ -40,14 +49,31 @@ def retire(prepared, session, removed):
         raise MooError("a removed key reappeared before ownership retirement")
     entries = {key: row for key, row in session.entries.items() if key not in removed}
     epoch = uuid4().hex
-    session.intent.update(old_epoch=session.epoch, new_epoch=epoch, entries=list(entries.values()),
-                          bindings=session.receipt["bindings"], phase="begin", batch=None, nonces={})
+    session.intent.update(
+        old_epoch=session.epoch,
+        new_epoch=epoch,
+        entries=list(entries.values()),
+        bindings=session.receipt["bindings"],
+        phase="begin",
+        batch=None,
+        nonces={},
+    )
     atomic_write(operation_path(world), json_text(session.intent))
-    world.eval(world.helper("tmoo_packages", '"begin"', world.transport.serialize(store.lock["world_id"]),
-               world.transport.serialize(session.epoch), world.transport.serialize(epoch), world.transport.serialize(list(entries.values()))))
+    world.eval(
+        world.helper(
+            "tmoo_packages",
+            '"begin"',
+            world.transport.serialize(store.lock["world_id"]),
+            world.transport.serialize(session.epoch),
+            world.transport.serialize(epoch),
+            world.transport.serialize(list(entries.values())),
+        )
+    )
     remote = read_remote(world)
     if remote["epoch"] != epoch or remote["entries"] != entries:
-        raise MooError("ownership retirement has an unknown outcome; run package recover")
+        raise MooError(
+            "ownership retirement has an unknown outcome; run package recover"
+        )
     session.epoch, session.entries = epoch, entries
     session.receipt["epoch"] = epoch
     for key in removed:
@@ -59,7 +85,9 @@ def retire(prepared, session, removed):
     for item in store.instances.values():
         for key in list(item["tombstones"]):
             if key.lower() in removed:
-                item.setdefault("removed_objects", {})[key] = item["tombstones"].pop(key)
+                item.setdefault("removed_objects", {})[key] = item["tombstones"].pop(
+                    key
+                )
         if item["state"] == "removing" and not item["tombstones"]:
             item["state"] = "removed"
     for item in store.lock["local_modules"].values():
@@ -73,7 +101,12 @@ def run(prepared, session, *, log=print):
     candidates = prepared.removals
     incoming_check(prepared, candidates)
     retained = definitions(prepared)
-    edges = {key: references(retained[key], prepared.refs) & candidates if key in retained else set() for key in candidates}
+    edges = {
+        key: references(retained[key], prepared.refs) & candidates
+        if key in retained
+        else set()
+        for key in candidates
+    }
     # Historical initialization edges are enforced between all candidate objects
     # in the corresponding modules, in addition to object-level references.
     by_module = {}
@@ -83,10 +116,16 @@ def run(prepared, session, *, log=print):
             by_module.setdefault(owner[2], set()).add(key)
     manifests = {}
     import tomllib
+
     for name, item in prepared.store.instances.items():
-        for module, record in {**item.get("removed_manifests", {}), **item["manifests"]}.items():
+        for module, record in {
+            **item.get("removed_manifests", {}),
+            **item["manifests"],
+        }.items():
             if record["baseline"]:
-                manifests[f"{name}/{module}".lower()] = tomllib.loads(record["baseline"])
+                manifests[f"{name}/{module}".lower()] = tomllib.loads(
+                    record["baseline"]
+                )
     manifests.update(prepared.store.lock["local_modules"])
     for mid, keys in by_module.items():
         for dep in manifests.get(mid, {}).get("depends_on", []):
@@ -110,10 +149,22 @@ def run(prepared, session, *, log=print):
             owner = owner_for(prepared.store, prepared.graph, key)
             if owner:
                 receipt = session.receipt["bindings"].get(key)
-                if not receipt or receipt["object"] != obj.num or receipt["generation"] != prepared.refs.generation_for(actual):
-                    raise MooError(f"{key}: deletion identity differs from the deployment receipt")
-            result = apply.run(prepared.world, plan.Plan(destroys={actual: obj}), prepared.refs,
-                               files=prepared.files, destroy=True, log=log)
+                if (
+                    not receipt
+                    or receipt["object"] != obj.num
+                    or receipt["generation"] != prepared.refs.generation_for(actual)
+                ):
+                    raise MooError(
+                        f"{key}: deletion identity differs from the deployment receipt"
+                    )
+            result = apply.run(
+                prepared.world,
+                plan.Plan(destroys={actual: obj}),
+                prepared.refs,
+                files=prepared.files,
+                destroy=True,
+                log=log,
+            )
             outcome.done.extend(result.done)
             outcome.failed.extend(result.failed)
             if result.failed:

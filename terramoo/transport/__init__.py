@@ -37,19 +37,36 @@ class Transport:
         """Set a property; an assignment, which is still an expression."""
         self.eval(f"{obj}.({self.escape(name)}) = {self.serialize(value)}")
 
-    def install_verb(self, obj, name: str, lines: list[str], *, perms: str = "rxd",
-                     args: tuple[str, str, str] = ("this", "none", "this")) -> str:
+    def install_verb(
+        self,
+        obj,
+        name: str,
+        lines: list[str],
+        *,
+        perms: str = "rxd",
+        args: tuple[str, str, str] = ("this", "none", "this"),
+    ) -> str:
         """Create or replace a verb from source lines; raise on compile errors."""
         exists = self.eval(f"{self.escape(name)} in verbs({obj})")
         if not exists:
-            self.eval(f"add_verb({obj}, {{player, {self.escape(perms)}, {self.escape(name)}}}, "
-                      f"{self.serialize(list(args))})")
+            self.eval(
+                f"add_verb({obj}, {{player, {self.escape(perms)}, {self.escape(name)}}}, "
+                f"{self.serialize(list(args))})"
+            )
         else:
-            self.eval(f"set_verb_info({obj}, {self.escape(name)}, {{player, {self.escape(perms)}, {self.escape(name)}}})")
-            self.eval(f"set_verb_args({obj}, {self.escape(name)}, {self.serialize(list(args))})")
-        errors = self.eval(f"set_verb_code({obj}, {self.escape(name)}, {self.serialize(lines)})")
+            self.eval(
+                f"set_verb_info({obj}, {self.escape(name)}, {{player, {self.escape(perms)}, {self.escape(name)}}})"
+            )
+            self.eval(
+                f"set_verb_args({obj}, {self.escape(name)}, {self.serialize(list(args))})"
+            )
+        errors = self.eval(
+            f"set_verb_code({obj}, {self.escape(name)}, {self.serialize(lines)})"
+        )
         if errors:
-            raise MooError(f"{obj}:{name} did not compile: " + " / ".join(map(str, errors)))
+            raise MooError(
+                f"{obj}:{name} did not compile: " + " / ".join(map(str, errors))
+            )
         return "updated" if exists else "installed"
 
 

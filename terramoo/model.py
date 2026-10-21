@@ -55,6 +55,7 @@ def ordered_like(obj: ObjectDef, template: ObjectDef) -> ObjectDef:
     """`obj` with its properties and verbs in `template`'s order, new ones
     after, in their own order.  Servers list inherited properties in
     different orders; a pull should not reshuffle a file for that."""
+
     def rank(names: list[str]):
         positions: dict[str, list[int]] = {}
         for i, name in enumerate(names):

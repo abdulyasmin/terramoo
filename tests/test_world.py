@@ -4,13 +4,12 @@ from types import SimpleNamespace
 import pytest
 
 from terramoo.errors import MooError
-from terramoo.moolit import serialize
 from terramoo.model import ObjectDef
-from terramoo.moolit import Obj
+from terramoo.moolit import Obj, serialize
 from terramoo.world import (
     DEFAULT_IGNORE_PROPS,
-    HELPER_VERSION_PROP,
     HELPER_VERBS,
+    HELPER_VERSION_PROP,
     REGISTRY_REVISION_PROP,
     REGISTRY_STATE_PROP,
     TOOLBOX_NAME,
@@ -29,20 +28,25 @@ def make_world(tmp_path, config):
 @pytest.mark.parametrize("key", ["me", "ME"])
 def test_player_alias_cannot_be_a_desired_object_key(tmp_path, key):
     w = make_world(tmp_path, 'player = "alice"\n[connection]\nhost = "localhost"\n')
-    (w.objects_dir / f"{key}.moo").write_text(f'object {key}\n name: "Unsafe"\n parent: #0\nendobject\n')
+    (w.objects_dir / f"{key}.moo").write_text(
+        f'object {key}\n name: "Unsafe"\n parent: #0\nendobject\n'
+    )
     with pytest.raises(MooError, match="reserved for the player"):
         w.load_files()
 
 
 def test_future_world_format_is_rejected_before_connecting(tmp_path):
     with pytest.raises(MooError, match="unsupported world format"):
-        make_world(tmp_path, 'format_version = 2\nplayer = "alice"\n[connection]\nhost = "localhost"\n')
+        make_world(
+            tmp_path,
+            'format_version = 2\nplayer = "alice"\n[connection]\nhost = "localhost"\n',
+        )
 
 
 def test_load_reads_generated_core_ignore_and_keep_settings(tmp_path):
     w = make_world(
         tmp_path,
-        '''player = "alice"
+        """player = "alice"
 
 [connection]
 host = "moo.example"
@@ -51,7 +55,7 @@ host = "moo.example"
 toolbox_parent = "$thing"
 ignore_props = ["session_cache"]
 keep_props = ["history"]
-''',
+""",
     )
     assert "session_cache" in w.ignore_props
     assert "history" not in w.ignore_props
@@ -64,23 +68,41 @@ def test_mixed_case_keep_props_survives_pull_and_plan(tmp_path, monkeypatch, sec
     from terramoo.model import PropDef
     from terramoo.refs import Refs
 
-    w = make_world(tmp_path, 'player = "alice"\n' + section + '''
+    w = make_world(
+        tmp_path,
+        'player = "alice"\n'
+        + section
+        + """
 ignore_props = ["HISTORY", "Session_Cache", "Temporary"]
 keep_props = ["History", "TEMPORARY"]
-''')
+""",
+    )
     player, hall = Obj(1), Obj(10)
     refs = Refs(player=player, registry={"hall": hall})
-    record = [hall, "Hall", Obj(2), Obj(-1), player, "", [
-        ["History", 1, player, "rc", "42"],
-        ["Temporary", 1, player, "rc", "7"],
-        ["SESSION_CACHE", 1, player, "rc", "9"],
-    ], []]
+    record = [
+        hall,
+        "Hall",
+        Obj(2),
+        Obj(-1),
+        player,
+        "",
+        [
+            ["History", 1, player, "rc", "42"],
+            ["Temporary", 1, player, "rc", "7"],
+            ["SESSION_CACHE", 1, player, "rc", "9"],
+        ],
+        [],
+    ]
     monkeypatch.setattr(w, "helper", lambda *args: "export")
     monkeypatch.setattr(w, "eval", lambda expression: [record])
     w._transport = SimpleNamespace()
     w._helper_version_checked = True
-    expected = ObjectDef(key="hall", name="Hall", parent=Obj(2),
-                         props=[PropDef("History", 42), PropDef("Temporary", 7)])
+    expected = ObjectDef(
+        key="hall",
+        name="Hall",
+        parent=Obj(2),
+        props=[PropDef("History", 42), PropDef("Temporary", 7)],
+    )
     w.write_file(expected)
 
     live = export.export(w, refs, ["hall"])
@@ -105,7 +127,9 @@ def test_load_files_rejects_a_key_that_does_not_match_its_filename(tmp_path):
     (w.objects_dir / "hall.moo").write_text(
         'object courtyard\n  name: "Courtyard"\n  parent: $room\nendobject\n'
     )
-    with pytest.raises(MooError, match="file is named 'hall' but declares object 'courtyard'"):
+    with pytest.raises(
+        MooError, match="file is named 'hall' but declares object 'courtyard'"
+    ):
         w.load_files()
 
 
@@ -144,9 +168,13 @@ def test_load_files_rejects_case_collisions(tmp_path, monkeypatch):
 
 def test_load_files_wraps_malformed_object_input_with_its_path(tmp_path):
     w = make_world(tmp_path, 'player = "alice"\n')
-    (w.objects_dir / "broken.moo").write_text('object broken\n  name: "Broken"\nendobject\n')
+    (w.objects_dir / "broken.moo").write_text(
+        'object broken\n  name: "Broken"\nendobject\n'
+    )
 
-    error = r"worlds/test/objects/broken\.moo: object broken: name and parent are required"
+    error = (
+        r"worlds/test/objects/broken\.moo: object broken: name and parent are required"
+    )
     with pytest.raises(MooError, match=error):
         w.load_files()
 
@@ -235,7 +263,9 @@ def test_file_for_rejects_keys_that_are_not_ascii_identifiers(tmp_path, key):
         w.file_for(key)
 
 
-def test_write_file_refuses_a_resolved_path_outside_objects_directory(tmp_path, monkeypatch):
+def test_write_file_refuses_a_resolved_path_outside_objects_directory(
+    tmp_path, monkeypatch
+):
     w = World("test", tmp_path, "alice", {})
     outside = tmp_path / "outside.moo"
     monkeypatch.setattr(w, "file_for", lambda key: outside)
@@ -388,10 +418,17 @@ def test_bootstrap_adopts_an_orphan_before_creating_another_toolbox(tmp_path):
     w = World("test", tmp_path, "alice", {}, _transport=transport, _player=Obj(1))
 
     assert w.bootstrap(log=lambda _: None) == Obj(9)
-    assert not any(expression.startswith("create(") for expression in transport.expressions)
+    assert not any(
+        expression.startswith("create(") for expression in transport.expressions
+    )
     assert 'add_property(player, "tmoo", #9, {player, "r"})' in transport.expressions
-    assert 'add_property(#9, "registry", {{}, {}, {}, 0}, {player, "r"})' in transport.expressions
-    assert any(HELPER_VERSION_PROP in expression for expression in transport.expressions)
+    assert (
+        'add_property(#9, "registry", {{}, {}, {}, 0}, {player, "r"})'
+        in transport.expressions
+    )
+    assert any(
+        HELPER_VERSION_PROP in expression for expression in transport.expressions
+    )
     assert transport.revision == 0
     assert transport.saved_registry == [[], [], [], 0]
     assert '#9:tmoo_registry("bootstrap")' in transport.expressions
@@ -455,7 +492,9 @@ def test_bootstrap_registry_migration_cannot_overwrite_a_concurrent_registration
 
 
 @pytest.mark.parametrize("can_suspend, suffix", [(True, ", 1)"), (False, ", 0)")])
-def test_helper_tells_remote_helpers_whether_the_transport_can_suspend(tmp_path, can_suspend, suffix):
+def test_helper_tells_remote_helpers_whether_the_transport_can_suspend(
+    tmp_path, can_suspend, suffix
+):
     w = World(
         "test",
         tmp_path,

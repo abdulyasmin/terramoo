@@ -31,7 +31,7 @@ class Moo:
         while time.time() < min(end, stop):
             try:
                 data = self.sock.recv(65536)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             if not data:
                 break
@@ -46,7 +46,7 @@ class Moo:
     def eval(self, expr: str) -> str:
         """Evaluate `;expr`; return the value text after `=> `, or die."""
         out = self.send(";" + expr)
-        m = re.search(r"^=> (.*)$", out, re.M)
+        m = re.search(r"^=> (.*)$", out, re.MULTILINE)
         if not m or "(End of traceback)" in out:
             sys.exit(f"prepare_db: `;{expr}` failed:\n{out}")
         print(f";{expr}\n  => {m.group(1)}")

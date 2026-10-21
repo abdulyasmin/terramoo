@@ -19,7 +19,9 @@ def test_json_quotes_and_empty_are_refused(pasted):
 
 def test_environment_secret_has_priority_and_is_not_stripped(monkeypatch):
     monkeypatch.setenv(secrets.ENV_VAR, "  from-env  ")
-    monkeypatch.setattr(secrets, "_keychain_read", lambda world: pytest.fail("keychain read"))
+    monkeypatch.setattr(
+        secrets, "_keychain_read", lambda world: pytest.fail("keychain read")
+    )
     assert secrets.secret_for("test") == "  from-env  "
 
 
@@ -60,12 +62,24 @@ def test_non_macos_store_creates_a_mode_600_file(tmp_path, monkeypatch):
 def test_macos_store_uses_the_keychain_without_returning_the_secret(monkeypatch):
     calls = []
     monkeypatch.setattr(secrets.sys, "platform", "darwin")
-    monkeypatch.setattr(secrets.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        secrets.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs))
+    )
     location = secrets.store_secret("test", "secret-value")
     assert location == "Keychain (terramoo/test)"
     assert calls == [
         (
-            ["security", "add-generic-password", "-U", "-s", "terramoo", "-a", "test", "-w", "secret-value"],
+            [
+                "security",
+                "add-generic-password",
+                "-U",
+                "-s",
+                "terramoo",
+                "-a",
+                "test",
+                "-w",
+                "secret-value",
+            ],
             {"check": True, "capture_output": True},
         )
     ]

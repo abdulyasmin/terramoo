@@ -18,13 +18,22 @@ from .. import moolit
 from ..errors import MooError
 from . import Transport
 
-_TAGGED = re.compile(r"(.*\S)\s+\((?:OBJ|ERR|ANON|WAIF|STR)\)", re.S)
+_TAGGED = re.compile(r"(.*\S)\s+\((?:OBJ|ERR|ANON|WAIF|STR)\)", re.DOTALL)
 
 
 class McpTransport(Transport):
-    def __init__(self, url: str, token: str, *, eval_tool: str = "eval", set_verb_tool: str | None = "set_verb",
-                 set_prop_tool: str | None = "set_prop", timeout: float = 90.0, batch_bytes: int = 24_000,
-                 dialect: str = moolit.LAMBDA):
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        *,
+        eval_tool: str = "eval",
+        set_verb_tool: str | None = "set_verb",
+        set_prop_tool: str | None = "set_prop",
+        timeout: float = 90.0,
+        batch_bytes: int = 24_000,
+        dialect: str = moolit.LAMBDA,
+    ):
         self.url = url
         self.token = token
         self.eval_tool = eval_tool
@@ -36,15 +45,24 @@ class McpTransport(Transport):
         self._id = 0
 
     @classmethod
-    def from_config(cls, conn: dict, secret: str) -> "McpTransport":
+    def from_config(cls, conn: dict, secret: str) -> McpTransport:
         if "url" not in conn:
             raise MooError("an mcp connection needs `url`")
-        keys = ("eval_tool", "set_verb_tool", "set_prop_tool", "timeout", "batch_bytes", "dialect")
+        keys = (
+            "eval_tool",
+            "set_verb_tool",
+            "set_prop_tool",
+            "timeout",
+            "batch_bytes",
+            "dialect",
+        )
         return cls(conn["url"], secret, **{k: conn[k] for k in keys if k in conn})
 
     def rpc(self, method: str, params: dict) -> dict:
         self._id += 1
-        body = json.dumps({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}).encode()
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
+        ).encode()
         req = urllib.request.Request(
             self.url,
             data=body,
@@ -60,21 +78,31 @@ class McpTransport(Transport):
                 ctype = resp.headers.get("Content-Type", "")
                 raw = resp.read().decode()
         except urllib.error.HTTPError as e:
-            raise MooError(f"HTTP {e.code} from {self.url}: {e.read().decode()[:300]}") from None
+            raise MooError(
+                f"HTTP {e.code} from {self.url}: {e.read().decode()[:300]}"
+            ) from None
         except urllib.error.URLError as e:
             raise MooError(f"cannot reach {self.url}: {e.reason}") from None
         try:
             if "text/event-stream" in ctype:
-                payloads = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+                payloads = [
+                    line[5:].strip()
+                    for line in raw.splitlines()
+                    if line.startswith("data:")
+                ]
                 if not payloads:
                     raise MooError(f"empty event stream from {self.url}")
                 msg = json.loads(payloads[-1])
             else:
                 msg = json.loads(raw)
         except json.JSONDecodeError as e:
-            raise MooError(f"invalid JSON-RPC response from {self.url}: {e.msg}") from None
+            raise MooError(
+                f"invalid JSON-RPC response from {self.url}: {e.msg}"
+            ) from None
         if not isinstance(msg, dict):
-            raise MooError(f"invalid JSON-RPC response from {self.url}: expected an object")
+            raise MooError(
+                f"invalid JSON-RPC response from {self.url}: expected an object"
+            )
         if "error" in msg:
             error = msg["error"]
             detail = error.get("message", error) if isinstance(error, dict) else error
@@ -88,21 +116,29 @@ class McpTransport(Transport):
         if not isinstance(result, dict):
             raise MooError(f"malformed result from {name}: expected an object")
         content = result.get("content", [])
-        if not isinstance(content, list) or not all(isinstance(c, dict) for c in content):
-            raise MooError(f"malformed result from {name}: content is not a list of objects")
+        if not isinstance(content, list) or not all(
+            isinstance(c, dict) for c in content
+        ):
+            raise MooError(
+                f"malformed result from {name}: content is not a list of objects"
+            )
         bad_text = any(
             c.get("type") == "text" and not isinstance(c.get("text", ""), str)
             for c in content
         )
         if bad_text:
-            raise MooError(f"malformed result from {name}: text content is not a string")
+            raise MooError(
+                f"malformed result from {name}: text content is not a string"
+            )
         text = "".join(c.get("text", "") for c in content if c.get("type") == "text")
         if result.get("isError"):
             raise MooError(text.strip() or f"{name} failed")
         return text
 
     def eval(self, expression: str):
-        text = self.call_tool(self.eval_tool, {"expression": f"toliteral({expression})"}).strip()
+        text = self.call_tool(
+            self.eval_tool, {"expression": f"toliteral({expression})"}
+        ).strip()
         m = _TAGGED.fullmatch(text)
         if m:
             text = m.group(1)
@@ -111,24 +147,40 @@ class McpTransport(Transport):
         except json.JSONDecodeError:
             literal = text  # a gate that answers with the bare string
         if not isinstance(literal, str):
-            raise MooError(f"eval returned something that is not a toliteral() string: {text[:200]}")
+            raise MooError(
+                f"eval returned something that is not a toliteral() string: {text[:200]}"
+            )
         try:
             return moolit.parse(literal, dialect=self.literal_dialect)
         except moolit.LiteralError as e:
-            raise MooError(f"cannot read the MOO's answer ({e}): {literal[:200]}") from None
+            raise MooError(
+                f"cannot read the MOO's answer ({e}): {literal[:200]}"
+            ) from None
 
     def set_prop(self, obj, name: str, value) -> None:
         if not self.set_prop_tool:
             return super().set_prop(obj, name, value)
-        self.call_tool(self.set_prop_tool, {"object": str(obj), "prop": name, "value": self.serialize(value)})
+        self.call_tool(
+            self.set_prop_tool,
+            {"object": str(obj), "prop": name, "value": self.serialize(value)},
+        )
 
-    def install_verb(self, obj, name, lines, *, perms="rxd", args=("this", "none", "this")) -> str:
+    def install_verb(
+        self, obj, name, lines, *, perms="rxd", args=("this", "none", "this")
+    ) -> str:
         if not self.set_verb_tool:
             return super().install_verb(obj, name, lines, perms=perms, args=args)
         exists = self.eval(f"{self.escape(name)} in verbs({obj})")
         dobj, prep, iobj = args
-        call = {"object": str(obj), "verb": name, "code": "\n".join(lines),
-                "permissions": perms, "dobj": dobj, "prep": prep, "iobj": iobj}
+        call = {
+            "object": str(obj),
+            "verb": name,
+            "code": "\n".join(lines),
+            "permissions": perms,
+            "dobj": dobj,
+            "prep": prep,
+            "iobj": iobj,
+        }
         if not exists:
             call["create"] = True
         r = self.call_tool(self.set_verb_tool, call)

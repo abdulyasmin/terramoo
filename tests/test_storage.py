@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from terramoo.errors import MooError
 from terramoo import storage
+from terramoo.errors import MooError
 
 
 def test_interrupted_transaction_recovers_forward(tmp_path, monkeypatch):
@@ -29,7 +29,9 @@ def test_interrupted_transaction_recovers_forward(tmp_path, monkeypatch):
     assert b.read_text() == "new b" and not storage.journal_path(tmp_path).exists()
 
 
-def test_recovery_refuses_concurrent_edits_before_replacing_other_files(tmp_path, monkeypatch):
+def test_recovery_refuses_concurrent_edits_before_replacing_other_files(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "objects/a.moo"
     path.parent.mkdir()
     path.write_text("old")
@@ -45,8 +47,16 @@ def test_recovery_refuses_concurrent_edits_before_replacing_other_files(tmp_path
 def test_corrupt_recovery_path_cannot_escape_world(tmp_path):
     journal = storage.journal_path(tmp_path)
     journal.parent.mkdir()
-    journal.write_text(json.dumps({"schema_version": 1, "changes": [
-        {"path": "../elsewhere", "before": None, "after": "b29wcw=="}]}))
+    journal.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "changes": [
+                    {"path": "../elsewhere", "before": None, "after": "b29wcw=="}
+                ],
+            }
+        )
+    )
     with pytest.raises(MooError, match="unsafe transaction path"):
         storage.recover(tmp_path)
 
@@ -63,7 +73,9 @@ def test_case_alias_transaction_does_not_delete_replaced_file(tmp_path):
     assert [p.name for p in path.parent.iterdir()] == ["ROOM.moo"]
 
 
-def test_case_rename_recovers_after_content_write_before_spelling_change(tmp_path, monkeypatch):
+def test_case_rename_recovers_after_content_write_before_spelling_change(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "objects" / "room.moo"
     path.parent.mkdir()
     path.write_text("old")

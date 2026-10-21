@@ -28,9 +28,15 @@ _IDENT_RE = re.compile(rf"{_IDENT}\Z", re.ASCII)
 _QUOTED_IDENT = r'"(?:[^"\\]|\\.)*"'
 _HEAD_RE = re.compile(rf"^object\s+({_IDENT})\s*$")
 _FIELD_RE = re.compile(rf"^\s*({_IDENT}):\s*(.*?)\s*$")
-_PROP_RE = re.compile(rf'^\s*property\s+({_QUOTED_IDENT}|\S+)\s*\((.*?)\)\s*=\s*(.*)$', re.S)
-_OVERRIDE_RE = re.compile(rf'^\s*override\s+({_QUOTED_IDENT}|\S+)\s*=\s*(.*)$', re.S)
-_VERB_RE = re.compile(rf'^\s*verb\s+({_QUOTED_IDENT}|\S+)\s*\((\S+)\s+(.+?)\s+(\S+)\)\s*(.*?)\s*$')
+_PROP_RE = re.compile(
+    rf"^\s*property\s+({_QUOTED_IDENT}|\S+)\s*\((.*?)\)\s*=\s*(.*)$", re.DOTALL
+)
+_OVERRIDE_RE = re.compile(
+    rf"^\s*override\s+({_QUOTED_IDENT}|\S+)\s*=\s*(.*)$", re.DOTALL
+)
+_VERB_RE = re.compile(
+    rf"^\s*verb\s+({_QUOTED_IDENT}|\S+)\s*\((\S+)\s+(.+?)\s+(\S+)\)\s*(.*?)\s*$"
+)
 _OPT_RE = re.compile(r'(\w+):\s*("(?:[^"\\]|\\.)*"|\S+)')
 
 
@@ -41,7 +47,9 @@ def is_identifier(value: object) -> bool:
 
 def validate_identifier(value: object, label: str = "object key") -> str:
     if not is_identifier(value):
-        raise FormatError(f"{label} must be an ASCII identifier (letters, digits, and underscores): {value!r}")
+        raise FormatError(
+            f"{label} must be an ASCII identifier (letters, digits, and underscores): {value!r}"
+        )
     return value
 
 
@@ -173,8 +181,10 @@ def _strip_indent(line: str, lineno: int) -> str:
     if not line.strip():
         return ""
     if line.startswith(CODE_INDENT):
-        return line[len(CODE_INDENT):]
-    raise FormatError(f"line {lineno + 1}: verb code must be indented {len(CODE_INDENT)} spaces")
+        return line[len(CODE_INDENT) :]
+    raise FormatError(
+        f"line {lineno + 1}: verb code must be indented {len(CODE_INDENT)} spaces"
+    )
 
 
 def _read_statement(lines: list[str], i: int) -> tuple[str, int]:
@@ -203,7 +213,7 @@ def _read_statement(lines: list[str], i: int) -> tuple[str, int]:
                 depth -= 1
             elif c == ";" and depth == 0:
                 buf.append(line[:j])
-                if line[j + 1:].strip():
+                if line[j + 1 :].strip():
                     raise FormatError(f"line {i + 1}: text after `;`")
                 return "\n".join(buf), i + 1
             j += 1
@@ -216,14 +226,21 @@ def _read_statement(lines: list[str], i: int) -> tuple[str, int]:
 
 
 def _ident_or_quoted(name: str) -> str:
-    return name if re.fullmatch(_IDENT, name) else moolit.escape(name, dialect=LITERAL_DIALECT, raw_unicode=True)
+    return (
+        name
+        if re.fullmatch(_IDENT, name)
+        else moolit.escape(name, dialect=LITERAL_DIALECT, raw_unicode=True)
+    )
 
 
 def _render_value(value) -> str:
     """Lists of strings (descriptions, help text) go one element per line so
     diffs stay line-sized; everything else stays on one line."""
     if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
-        inner = ",\n".join("    " + moolit.escape(v, dialect=LITERAL_DIALECT, raw_unicode=True) for v in value)
+        inner = ",\n".join(
+            "    " + moolit.escape(v, dialect=LITERAL_DIALECT, raw_unicode=True)
+            for v in value
+        )
         return "{\n" + inner + "\n  }"
     return moolit.serialize(value, dialect=LITERAL_DIALECT, raw_unicode=True)
 
@@ -240,7 +257,9 @@ def render(obj: ObjectDef) -> str:
     if obj.owner is not None:
         out.append(f"  owner: {obj.owner}")
     if obj.flags:
-        out.append(f"  flags: {moolit.escape(obj.flags, dialect=LITERAL_DIALECT, raw_unicode=True)}")
+        out.append(
+            f"  flags: {moolit.escape(obj.flags, dialect=LITERAL_DIALECT, raw_unicode=True)}"
+        )
     if obj.props:
         out.append("")
     for p in obj.props:
@@ -248,9 +267,13 @@ def render(obj: ObjectDef) -> str:
             opts = f"flags: {moolit.escape(p.perms, dialect=LITERAL_DIALECT, raw_unicode=True)}"
             if p.owner is not None:
                 opts += f", owner: {p.owner}"
-            out.append(f"  property {_ident_or_quoted(p.name)} ({opts}) = {_render_value(p.value)};")
+            out.append(
+                f"  property {_ident_or_quoted(p.name)} ({opts}) = {_render_value(p.value)};"
+            )
         else:
-            out.append(f"  override {_ident_or_quoted(p.name)} = {_render_value(p.value)};")
+            out.append(
+                f"  override {_ident_or_quoted(p.name)} = {_render_value(p.value)};"
+            )
     for v in obj.verbs:
         out.append("")
         head = (

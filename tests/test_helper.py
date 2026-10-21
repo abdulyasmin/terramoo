@@ -5,20 +5,19 @@ directory; never start or modify a running testbed or download missing sources.
 """
 
 import gzip
-from pathlib import Path
 import platform
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from terramoo import plan
-from terramoo.moolit import parse, serialize
 from terramoo.model import ObjectDef, PropDef
-from terramoo.moolit import Obj, Ref
+from terramoo.moolit import Obj, Ref, parse, serialize
 from terramoo.refs import Refs
-from terramoo.world import HELPER_VERBS, registry_value, helper_source
+from terramoo.world import HELPER_VERBS, helper_source, registry_value
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +35,7 @@ def test_exit_callbacks_are_all_wrapped_by_registry_reconciliation():
 def test_registry_reconcile_keeps_the_unprotected_revision_floor():
     helper = (ROOT / "terramoo/helper/tmoo_registry.moo").read_text()
     fallback = helper.split('elseif (mode == "reconcile")', 1)[1].split(
-        'protected_revision = this._terramoo_registry_revision;', 1
+        "protected_revision = this._terramoo_registry_revision;", 1
     )[0]
 
     assert "before = args[2];" in fallback
@@ -51,24 +50,31 @@ def _helper_install_source():
     statements = []
     for name in HELPER_VERBS:
         code = helper_source(name)
-        statements.extend([
-            f'add_verb(tool, {{#2, "xd", "{name}"}}, {{"this", "none", "this"}});',
-            f'errors = set_verb_code(tool, "{name}", {serialize(code)});',
-            'if (errors) raise(E_INVARG, toliteral(errors)); endif',
-        ])
+        statements.extend(
+            [
+                f'add_verb(tool, {{#2, "xd", "{name}"}}, {{"this", "none", "this"}});',
+                f'errors = set_verb_code(tool, "{name}", {serialize(code)});',
+                "if (errors) raise(E_INVARG, toliteral(errors)); endif",
+            ]
+        )
     return "\n".join(statements)
 
 
-def test_player_reader_skips_unreadable_ancestry_and_refuses_secrets(offline_moo, tmp_path):
+def test_player_reader_skips_unreadable_ancestry_and_refuses_secrets(
+    offline_moo, tmp_path
+):
     runner = [
-        'tool = this;',
-        'hidden = parent(player);',
-        'denied = `properties(hidden) ! E_PERM => E_PERM\';',
+        "tool = this;",
+        "hidden = parent(player);",
+        "denied = `properties(hidden) ! E_PERM => E_PERM';",
         'selected = tool:tmoo_player_read("field", {"property", "description"});',
         'secret = `tool:tmoo_player_read("field", {"property", "PASSWORD"}) ! E_PERM => E_PERM\';',
-        'return {denied, selected[6], selected[2], secret};',
+        "return {denied, selected[6], selected[2], secret};",
     ]
-    result = _run_helper_script(offline_moo, tmp_path, f'''
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        f"""
 hidden = create(#-1);
 hidden.r = 0;
 add_property(hidden, "description", "Selected public description", {{#2, "rc"}});
@@ -90,23 +96,31 @@ add_verb(#2, {{#2, "xd", "tmoo_test_player_runner"}}, {{"this", "none", "this"}}
 errors = set_verb_code(#2, "tmoo_test_player_runner", {{"player = args[1];", "return args[2]:tmoo_test_player_worker();"}});
 if (errors) raise(E_INVARG, toliteral(errors)); endif
 return #2:tmoo_test_player_runner(who, tool);
-''')
+""",
+    )
     from terramoo.moolit import Err
+
     assert result == [Err("E_PERM"), "Selected public description", 0, Err("E_PERM")]
 
 
 def test_ordinary_helpers_reject_player_and_toolbox_bindings(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, '''
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 player_result = tool:tmoo_apply({{"register", "character", #2, "nonce"}});
 tool_result = tool:tmoo_apply({{"register", "tool", tool, "nonce"}});
 return {player_result[1][1], tool_result[1][1], tool.registry[1]};
-''')
+""",
+    )
     assert result == [0, 0, []]
 
 
-def test_owned_objects_require_current_epoch_and_explicit_removal(offline_moo, tmp_path):
+def test_owned_objects_require_current_epoch_and_explicit_removal(
+    offline_moo, tmp_path
+):
     binary, database = offline_moo
-    script = f''' ;;
+    script = f""" ;;
 tool = create(#-1);
 add_property(tool, "registry", {{{{}}, {{}}, {{}}, 0}}, {{#2, ""}});
 {_helper_install_source()}
@@ -123,9 +137,14 @@ destroyed = tool:tmoo_apply({{{{"owned", "epoch2", {{"destroy", "mine", o, "nonc
 return {{create_result[1][1], unowned[1][1], stale[1][1], desired[1][1], destroyed[1][1], valid(o)}};
 .
 quit
-'''.lstrip()
-    result = subprocess.run([str(binary), "-e", str(database), str(tmp_path / "out.db")],
-                            input=script, capture_output=True, text=True, timeout=30)
+""".lstrip()
+    result = subprocess.run(
+        [str(binary), "-e", str(database), str(tmp_path / "out.db")],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
     assert reply, result.stdout + result.stderr
@@ -142,12 +161,20 @@ def offline_moo(tmp_path_factory):
     if not shutil.which("make") or not shutil.which("cc"):
         pytest.skip("requires make and cc for the stdin/stdout LambdaMOO build")
     work = tmp_path_factory.mktemp("offline-moo")
-    source = Path(shutil.copytree(source, work / "src", ignore=shutil.ignore_patterns("*.o", "moo")))
+    source = Path(
+        shutil.copytree(
+            source, work / "src", ignore=shutil.ignore_patterns("*.o", "moo")
+        )
+    )
     options = source / "options.h"
-    text, count = re.subn(r"(#define NETWORK_PROTOCOL\s+)NP_TCP", r"\1NP_SINGLE", options.read_text())
+    text, count = re.subn(
+        r"(#define NETWORK_PROTOCOL\s+)NP_TCP", r"\1NP_SINGLE", options.read_text()
+    )
     assert count == 1, "refuse to run unless the socket backend was replaced"
     options.write_text(text)
-    result = subprocess.run(["make", "moo"], cwd=source, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(
+        ["make", "moo"], cwd=source, capture_output=True, text=True, timeout=120
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     database = work / "pristine.db"
     database.write_bytes(gzip.decompress(core.read_bytes()))
@@ -155,7 +182,9 @@ def offline_moo(tmp_path_factory):
 
 
 @pytest.mark.parametrize("callback_key", ["auto_child", "CHILD"])
-def test_create_preserves_initialize_callback_registration(offline_moo, tmp_path, callback_key):
+def test_create_preserves_initialize_callback_registration(
+    offline_moo, tmp_path, callback_key
+):
     binary, database = offline_moo
     initialize = [
         f'return this.toolbox:tmoo_apply({{{{"register", "{callback_key}", this, "callback-generation"}}}});'
@@ -177,7 +206,10 @@ quit
 """
     result = subprocess.run(
         [str(binary), "-e", str(database), str(tmp_path / "out.db")],
-        input=script, capture_output=True, text=True, timeout=30,
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
@@ -191,7 +223,9 @@ quit
 
 
 @pytest.mark.parametrize("callback", ["add", "nested", "rebind", "remove", "shift"])
-def test_destroy_preserves_recycle_callback_registry_changes(offline_moo, tmp_path, callback):
+def test_destroy_preserves_recycle_callback_registry_changes(
+    offline_moo, tmp_path, callback
+):
     binary, database = offline_moo
     changes = 'this.toolbox.registry = {{"old", "survivor"}, {this, this.survivor}, {"old-generation", "survivor-generation"}};'
     if callback == "nested":
@@ -207,7 +241,11 @@ def test_destroy_preserves_recycle_callback_registry_changes(offline_moo, tmp_pa
     recycle = [changes, "return 1;"]
     expected_key = "OLD" if callback == "rebind" else "survivor"
     expected_revision = 2 if callback in ("rebind", "remove") else 3
-    initial = '{{"before", "old"}, {after, old}, {"before-generation", "old-generation"}}' if callback == "shift" else '{{"old"}, {old}, {"old-generation"}}'
+    initial = (
+        '{{"before", "old"}, {after, old}, {"before-generation", "old-generation"}}'
+        if callback == "shift"
+        else '{{"old"}, {old}, {"old-generation"}}'
+    )
     script = f""";;
 tool = create(#-1);
 add_property(tool, "registry", {{{{}}, {{}}, {{}}}}, {{#2, ""}});
@@ -231,7 +269,10 @@ quit
 """
     result = subprocess.run(
         [str(binary), "-e", str(database), str(tmp_path / "out.db")],
-        input=script, capture_output=True, text=True, timeout=30,
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     reply = re.search(r"^=> (.+)$", result.stdout, re.MULTILINE)
@@ -262,7 +303,10 @@ quit
 """
     result = subprocess.run(
         [str(binary), "-e", str(database), str(tmp_path / "out.db")],
-        input=script, capture_output=True, text=True, timeout=30,
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     replies = re.findall(r"^=> (.+)$", result.stdout, re.MULTILINE)
@@ -272,8 +316,13 @@ quit
     return parse(reply)
 
 
-def test_endpoint_refusal_restores_property_and_old_room_membership(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+def test_endpoint_refusal_restores_property_and_old_room_membership(
+    offline_moo, tmp_path
+):
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 old = create(#-1);
 new = create(#-1);
 door = create($exit);
@@ -292,13 +341,19 @@ add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
 tool.registry = {{"door"}, {door}, {"door-generation"}};
 result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new}});
 return {result, door.source == old, door in old.exits, door in new.exits};
-""")
+""",
+    )
     assert result[0][0][:2] == [0, "E_INVARG"]
     assert result[1:] == [1, 1, 0]
 
 
-def test_endpoint_remove_failure_compensates_every_completed_step(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+def test_endpoint_remove_failure_compensates_every_completed_step(
+    offline_moo, tmp_path
+):
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 old = create(#-1);
 new = create(#-1);
 door = create($exit);
@@ -317,13 +372,19 @@ add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
 tool.registry = {{"door"}, {door}, {"door-generation"}};
 result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new}});
 return {result, door.source == old, door in old.exits, door in new.exits};
-""")
+""",
+    )
     assert result[0][0][:2] == [0, "E_INVARG"]
     assert result[1:] == [1, 1, 0]
 
 
-def test_endpoint_rollback_restores_property_before_guarded_old_membership(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+def test_endpoint_rollback_restores_property_before_guarded_old_membership(
+    offline_moo, tmp_path
+):
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 old = create(#-1);
 new = create(#-1);
 door = create($exit);
@@ -342,19 +403,24 @@ add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
 tool.registry = {{"door"}, {door}, {"door-generation"}};
 result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, new, 1, 1}});
 return {result, door.source == old, door in old.exits, door in new.exits};
-""")
+""",
+    )
     assert result[0][0][:2] == [0, "E_INVARG"]
     assert result[1:] == [1, 1, 0]
 
 
 def test_rename_revision_rejects_a_stale_interleaved_operation(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 o = create(#-1);
 add_property(o, "_terramoo_generation", "object-generation", {#2, "r"});
 tool.registry = {{"old"}, {o}, {"object-generation"}, 0};
 result = tool:tmoo_apply({{"rename", 1, 0, o, "object-generation", "other"}, {"rename", 1, 0, o, "object-generation", "new"}});
 return {result, tool.registry[1][1], tool.registry[4]};
-""")
+""",
+    )
     assert result[0][0][0] == 1
     assert result[0][1][:2] == [0, "E_INVARG"]
     assert result[1:] == ["other", 1]
@@ -363,12 +429,14 @@ return {result, tool.registry[1][1], tool.registry[4]};
 def test_direct_callback_registry_edit_advances_revision_and_rejects_stale_rename(
     offline_moo, tmp_path
 ):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox.registry = {{"operator_choice", "door"}, saved[2], saved[3], saved[4]};',
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox.registry = {{"operator_choice", "door"}, saved[2], saved[3], saved[4]};',
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 room = create(#-1);
@@ -400,13 +468,15 @@ return {result, tool.registry};
 def test_nested_non_registry_apply_does_not_bless_a_direct_callback_edit(
     offline_moo, tmp_path
 ):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox.registry = {{"operator_choice", "door"}, saved[2], saved[3], saved[4]};',
-        'this.toolbox:tmoo_apply({{"name", "operator_choice", this.existing, "existing-generation", "Nested name"}});',
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox.registry = {{"operator_choice", "door"}, saved[2], saved[3], saved[4]};',
+            'this.toolbox:tmoo_apply({{"name", "operator_choice", this.existing, "existing-generation", "Nested name"}});',
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 room = create(#-1);
@@ -440,13 +510,15 @@ return {result, tool.registry, existing.name};
 def test_stale_derived_callback_registry_write_reports_conflict_and_keeps_current(
     offline_moo, tmp_path
 ):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        'this.toolbox.registry = {{@saved[1], "callback"}, {@saved[2], this.callback_object}, {@saved[3], "callback-generation"}, saved[4]};',
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            'this.toolbox.registry = {{@saved[1], "callback"}, {@saved[2], this.callback_object}, {@saved[3], "callback-generation"}, saved[4]};',
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 other = create(#-1);
@@ -483,13 +555,15 @@ return {result, tool.registry};
 def test_malformed_stale_callback_registry_is_restored_before_diagnostics(
     offline_moo, tmp_path
 ):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        "this.toolbox.registry = {saved[1], {saved[2][1]}, saved[3], saved[4]};",
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            "this.toolbox.registry = {saved[1], {saved[2][1]}, saved[3], saved[4]};",
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 other = create(#-1);
@@ -527,15 +601,21 @@ def test_large_stale_callback_registry_conflict_is_bounded_and_restored(
 ):
     keys = [f"key_{i:03}" for i in range(149)] + ["door"]
     key_literal = serialize(keys)
-    object_literal = "{" + ", ".join([f"#{1000 + i}" for i in range(149)] + ["door"]) + "}"
-    nonce_literal = serialize([f"generation-{i:03}" for i in range(149)] + ["door-generation"])
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        'this.toolbox.registry = {{"callback", @listdelete(saved[1], 1)}, saved[2], saved[3], saved[4]};',
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    object_literal = (
+        "{" + ", ".join([f"#{1000 + i}" for i in range(149)] + ["door"]) + "}"
+    )
+    nonce_literal = serialize(
+        [f"generation-{i:03}" for i in range(149)] + ["door-generation"]
+    )
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            'this.toolbox.registry = {{"callback", @listdelete(saved[1], 1)}, saved[2], saved[3], saved[4]};',
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = f"""
 other = create(#-1);
 room = create(#-1);
@@ -571,10 +651,12 @@ return {{result, tool.registry, tool._terramoo_registry_state}};
 def test_rename_revision_survives_a_legacy_registry_from_recycle(
     offline_moo, tmp_path, protected
 ):
-    recycle = serialize([
-        'this.toolbox.registry = {{"other", "doomed"}, {this.target, this}, {"object-generation", "doomed-generation"}};',
-        "return 1;",
-    ])
+    recycle = serialize(
+        [
+            'this.toolbox.registry = {{"other", "doomed"}, {this.target, this}, {"object-generation", "doomed-generation"}};',
+            "return 1;",
+        ]
+    )
     protected_setup = (
         """
 add_property(tool, "_terramoo_registry_revision", 1, {#2, "r"});
@@ -609,13 +691,15 @@ def test_create_keeps_interleaved_registration_and_never_reuses_revision(
 ):
     # The nested helper call models task B running while task A's callback is
     # yielded; the callback then resumes and restores its saved registry.
-    initialize = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
-        "this.toolbox.registry = saved;",
-        "return 1;",
-    ])
+    initialize = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
+            "this.toolbox.registry = saved;",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 other = create(#-1);
@@ -643,14 +727,16 @@ return {result, tool.registry, tool.interleaved_revision, tool._terramoo_registr
 
 
 def test_link_keeps_interleaved_registration_from_add_exit(offline_moo, tmp_path):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
-        "this.toolbox.registry = saved;",
-        "this.exits = setadd(this.exits, args[1]);",
-        "return 1;",
-    ])
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
+            "this.toolbox.registry = saved;",
+            "this.exits = setadd(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 other = create(#-1);
@@ -682,17 +768,17 @@ return {result, tool.registry, tool.interleaved_revision};
     assert registry.revision == result[2] == 3
 
 
-def test_unlink_keeps_interleaved_registration_from_remove_exit(
-    offline_moo, tmp_path
-):
-    callback = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
-        "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
-        "this.toolbox.registry = saved;",
-        "this.exits = setremove(this.exits, args[1]);",
-        "return 1;",
-    ])
+def test_unlink_keeps_interleaved_registration_from_remove_exit(offline_moo, tmp_path):
+    callback = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"register", "other", this.other, "other-generation"}});',
+            "this.toolbox.interleaved_revision = this.toolbox.registry[4];",
+            "this.toolbox.registry = saved;",
+            "this.exits = setremove(this.exits, args[1]);",
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 other = create(#-1);
@@ -722,7 +808,9 @@ return {result, tool.registry, tool.interleaved_revision};
     assert registry.revision == result[2] == 3
 
 
-@pytest.mark.parametrize("legacy", [True, False], ids=["legacy-shape", "lower-revision"])
+@pytest.mark.parametrize(
+    "legacy", [True, False], ids=["legacy-shape", "lower-revision"]
+)
 def test_helper_honors_external_registry_content_and_advances_revision(
     offline_moo, tmp_path, legacy
 ):
@@ -731,7 +819,10 @@ def test_helper_honors_external_registry_content_and_advances_revision(
         if legacy
         else '{{"operator"}, {operator}, {"operator-generation"}, 2}'
     )
-    result = _run_helper_script(offline_moo, tmp_path, f"""
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        f"""
 stale = create(#-1);
 operator = create(#-1);
 after = create(#-1);
@@ -743,7 +834,8 @@ add_property(tool, "_terramoo_registry_state", tool.registry, {{#2, "r"}});
 tool.registry = {registry};
 result = tool:tmoo_apply({{{{"register", "after", after, "after-generation"}}}});
 return {{result, tool.registry, tool._terramoo_registry_revision}};
-""")
+""",
+    )
 
     registry = registry_value(result[1])
     assert result[0][0][0] == 1
@@ -751,13 +843,17 @@ return {{result, tool.registry, tool._terramoo_registry_revision}};
     assert registry.revision == result[2] == 7
 
 
-def test_create_rejects_case_only_stale_callback_registry_rewrite(offline_moo, tmp_path):
-    initialize = serialize([
-        "saved = this.toolbox.registry;",
-        'this.toolbox:tmoo_apply({{"rename", 1, 2, this.existing, "existing-generation", "task_b"}});',
-        'this.toolbox.registry = {{"EXISTING"}, saved[2], saved[3], saved[4]};',
-        "return 1;",
-    ])
+def test_create_rejects_case_only_stale_callback_registry_rewrite(
+    offline_moo, tmp_path
+):
+    initialize = serialize(
+        [
+            "saved = this.toolbox.registry;",
+            'this.toolbox:tmoo_apply({{"rename", 1, 2, this.existing, "existing-generation", "task_b"}});',
+            'this.toolbox.registry = {{"EXISTING"}, saved[2], saved[3], saved[4]};',
+            "return 1;",
+        ]
+    )
     body = """
 existing = create(#-1);
 parent = create(#-1);
@@ -784,7 +880,10 @@ return {result, tool.registry, tool._terramoo_registry_revision};
 
 
 def test_endpoint_on_non_exit_only_cas_updates_the_property(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 old = create(#-1);
 new = create(#-1);
 thing = create(#-1);
@@ -799,12 +898,16 @@ add_property(thing, "_terramoo_generation", "thing-generation", {#2, "r"});
 tool.registry = {{"thing"}, {thing}, {"thing-generation"}};
 result = tool:tmoo_apply({{"endpoint", "thing", thing, "thing-generation", "source", old, new}});
 return {result, thing.source == new, thing in old.exits, thing in new.exits};
-""")
+""",
+    )
     assert result == [[[1, 1]], 1, 1, 0]
 
 
 def test_unlink_on_non_exit_does_not_call_room_callbacks(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 room = create(#-1);
 thing = create(#-1);
 add_property(room, "exits", {thing}, {#2, "rw"});
@@ -814,12 +917,16 @@ add_property(thing, "_terramoo_generation", "thing-generation", {#2, "r"});
 tool.registry = {{"thing"}, {thing}, {"thing-generation"}};
 result = tool:tmoo_apply({{"unlink", "thing", thing, "thing-generation", "exit", room}});
 return {result, thing in room.exits};
-""")
+""",
+    )
     assert result == [[[1, 1]], 1]
 
 
 def test_exit_endpoint_to_scalar_removes_old_membership(offline_moo, tmp_path):
-    result = _run_helper_script(offline_moo, tmp_path, """
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        """
 old = create(#-1);
 door = create($exit);
 add_property(old, "exits", {door}, {#2, "rw"});
@@ -832,7 +939,8 @@ add_property(door, "_terramoo_generation", "door-generation", {#2, "r"});
 tool.registry = {{"door"}, {door}, {"door-generation"}};
 result = tool:tmoo_apply({{"endpoint", "door", door, "door-generation", "source", old, "nowhere"}});
 return {result, door.source, door in old.exits};
-""")
+""",
+    )
     assert result == [[[1, 1]], "nowhere", 0]
 
 
@@ -862,7 +970,10 @@ def test_exit_to_non_exit_removing_endpoint_unlinks_old_room(
         "clearprop": f'{{"clearprop", "door", door, "door-generation", "{prop}"}}',
     }
     helper_ops = ", ".join(expressions[op[0]] for op in planned)
-    result = _run_helper_script(offline_moo, tmp_path, f"""
+    result = _run_helper_script(
+        offline_moo,
+        tmp_path,
+        f"""
 room = create(#-1);
 ordinary = create(#-1);
 door = create($exit);
@@ -874,7 +985,8 @@ add_property(door, "_terramoo_generation", "door-generation", {{#2, "r"}});
 tool.registry = {{{{"door"}}, {{door}}, {{"door-generation"}}}};
 result = tool:tmoo_apply({{{helper_ops}}});
 return {{result, parent(door) == ordinary, door in room.{membership}}};
-""")
+""",
+    )
     assert [op[0] for op in planned] == ["unlink", "clearprop", "chparent"]
     assert all(item[0] == 1 for item in result[0])
     assert result[1:] == [1, 0]

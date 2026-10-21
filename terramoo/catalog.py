@@ -47,7 +47,9 @@ class Discovery:
                 raise MooError(f"{path}: {e}") from None
             key = path.stem.lower()
             if key in found:
-                raise MooError(f"duplicate keys (or keys that differ only in case): {found[key]} and {path}")
+                raise MooError(
+                    f"duplicate keys (or keys that differ only in case): {found[key]} and {path}"
+                )
             found[key] = path
         return found
 

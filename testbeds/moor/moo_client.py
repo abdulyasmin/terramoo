@@ -22,7 +22,7 @@ class Moo:
         self.sock.settimeout(max(0.05, deadline - time.monotonic()))
         try:
             data = self.sock.recv(65536)
-        except socket.timeout:
+        except TimeoutError:
             return False
         if not data:
             raise ConnectionError("connection closed by server")

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import cli, export as export_mod, moolit, objdef, plan
+from terramoo import cli, moolit, objdef, plan
+from terramoo import export as export_mod
 from terramoo.errors import MooError
 from terramoo.model import ObjectDef, PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
@@ -30,7 +31,9 @@ class ExportWorld:
 def test_export_chunks_requests_and_preserves_vanished_objects():
     registry = {f"object_{i}": Obj(i) for i in range(1, 11)}
     records = {
-        obj: [obj] if i == 4 else [obj, f"Object {i}", Obj(0), Obj(-1), Obj(1), "", [], []]
+        obj: [obj]
+        if i == 4
+        else [obj, f"Object {i}", Obj(0), Obj(-1), Obj(1), "", [], []]
         for i, obj in enumerate(registry.values(), 1)
     }
     world = ExportWorld(records)
@@ -113,7 +116,13 @@ def test_export_decodes_refs_owners_flags_properties_and_verbs():
 def test_export_retains_the_live_numeric_verb_descriptor():
     obj = Obj(10)
     record = [
-        obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [],
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [],
         [["do", Obj(1), "rd", ["this", "none", "this"], ["return 1;"], 7]],
     ]
     refs = Refs(player=Obj(1), registry={"hall": obj})
@@ -125,7 +134,16 @@ def test_export_retains_the_live_numeric_verb_descriptor():
 
 def test_export_rejects_a_malformed_nested_property_literal():
     obj = Obj(10)
-    record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rc", "{1,"]], []]
+    record = [
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [["bad", 1, Obj(1), "rc", "{1,"]],
+        [],
+    ]
     world = ExportWorld({obj: record})
     refs = Refs(player=Obj(1), registry={"hall": obj})
 
@@ -135,7 +153,16 @@ def test_export_rejects_a_malformed_nested_property_literal():
 
 def test_export_rejects_an_oversized_integer_property_literal():
     obj = Obj(10)
-    record = [obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rc", "9" * 5_000]], []]
+    record = [
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [["bad", 1, Obj(1), "rc", "9" * 5_000]],
+        [],
+    ]
     world = ExportWorld({obj: record})
     refs = Refs(player=Obj(1), registry={"hall": obj})
 
@@ -146,15 +173,110 @@ def test_export_rejects_an_oversized_integer_property_literal():
 @pytest.mark.parametrize(
     "record, expected",
     [
-        ([Obj(10), "Hall\nshutdown", Obj(0), Obj(-1), Obj(1), "", [], []], "malformed record"),
+        (
+            [Obj(10), "Hall\nshutdown", Obj(0), Obj(-1), Obj(1), "", [], []],
+            "malformed record",
+        ),
         ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "r\n", [], []], "malformed record"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad\rname", 1, Obj(1), "rc", "1"]], []], "malformed property"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [["bad", 1, Obj(1), "rz", "1"]], []], "malformed property"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [[" \t", Obj(1), "rd", ["this", "none", "this"], []]]], "malformed fields"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rz", ["this", "none", "this"], []]]], "malformed fields"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["", "none", "this"], []]]], "malformed fields"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["other", "none", "this"], []]]], "malformed fields"),
-        ([Obj(10), "Hall", Obj(0), Obj(-1), Obj(1), "", [], [["look", Obj(1), "rd", ["this", "none", "this"], ["return 1;\nshutdown();"]]]], "malformed fields"),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [["bad\rname", 1, Obj(1), "rc", "1"]],
+                [],
+            ],
+            "malformed property",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [["bad", 1, Obj(1), "rz", "1"]],
+                [],
+            ],
+            "malformed property",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [],
+                [[" \t", Obj(1), "rd", ["this", "none", "this"], []]],
+            ],
+            "malformed fields",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [],
+                [["look", Obj(1), "rz", ["this", "none", "this"], []]],
+            ],
+            "malformed fields",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [],
+                [["look", Obj(1), "rd", ["", "none", "this"], []]],
+            ],
+            "malformed fields",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [],
+                [["look", Obj(1), "rd", ["other", "none", "this"], []]],
+            ],
+            "malformed fields",
+        ),
+        (
+            [
+                Obj(10),
+                "Hall",
+                Obj(0),
+                Obj(-1),
+                Obj(1),
+                "",
+                [],
+                [
+                    [
+                        "look",
+                        Obj(1),
+                        "rd",
+                        ["this", "none", "this"],
+                        ["return 1;\nshutdown();"],
+                    ]
+                ],
+            ],
+            "malformed fields",
+        ),
     ],
 )
 def test_export_rejects_fields_that_cannot_be_rendered_as_lines(record, expected):
@@ -226,7 +348,15 @@ def test_export_render_parse_plan_is_empty_for_canonical_multiword_preposition(d
         Obj(1),
         "",
         [],
-        [["put", Obj(1), "rd", ["any", "on top of/on/onto/upon", "this"], ["return 1;"]]],
+        [
+            [
+                "put",
+                Obj(1),
+                "rd",
+                ["any", "on top of/on/onto/upon", "this"],
+                ["return 1;"],
+            ]
+        ],
     ]
     world = ExportWorld({obj: record})
     world.transport = SimpleNamespace(literal_dialect=dialect)
@@ -245,7 +375,9 @@ def test_export_render_parse_plan_is_empty_for_canonical_multiword_preposition(d
     "property_name, ignored_name",
     [("Password", "password"), ("sessioncache", "SessionCache")],
 )
-def test_export_skips_ignored_private_property_case_insensitively(property_name, ignored_name):
+def test_export_skips_ignored_private_property_case_insensitively(
+    property_name, ignored_name
+):
     obj = Obj(10)
     record = [
         obj,
@@ -268,7 +400,13 @@ def test_export_skips_ignored_private_property_case_insensitively(property_name,
 def test_malformed_nested_verb_code_never_reaches_the_writer():
     obj = Obj(10)
     record = [
-        obj, "Hall", Obj(0), Obj(-1), Obj(1), "", [],
+        obj,
+        "Hall",
+        Obj(0),
+        Obj(-1),
+        Obj(1),
+        "",
+        [],
         [["look", Obj(1), "rd", ["this", "none", "this"], "return 1;"]],
     ]
     world = ExportWorld({obj: record})

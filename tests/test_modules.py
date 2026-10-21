@@ -1,8 +1,6 @@
-from pathlib import Path
-
 import pytest
 
-from terramoo import cli, objdef, plan
+from terramoo import cli, plan
 from terramoo.catalog import discover
 from terramoo.errors import MooError
 from terramoo.model import ObjectDef, PropDef
@@ -40,8 +38,12 @@ def test_reciprocal_refs_are_a_single_execution_group(tmp_path):
     module(w, "a", "a", references=["b"], depends_on=["base"])
     module(w, "b", "b", references=["a"])
     module(w, "base", "base")
-    w.write_file(ObjectDef("a", "A", Obj(0), props=[PropDef("peer", Ref("@", "b"))]), into="a")
-    w.write_file(ObjectDef("b", "B", Obj(0), props=[PropDef("peer", Ref("@", "a"))]), into="b")
+    w.write_file(
+        ObjectDef("a", "A", Obj(0), props=[PropDef("peer", Ref("@", "b"))]), into="a"
+    )
+    w.write_file(
+        ObjectDef("b", "B", Obj(0), props=[PropDef("peer", Ref("@", "a"))]), into="b"
+    )
     g = graph(w)
     assert g.groups == [("local/base",), ("local/a", "local/b")]
     assert g.select(["a"], with_deps=True) == {"local/a", "local/b", "local/base"}

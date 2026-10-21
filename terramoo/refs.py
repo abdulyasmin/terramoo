@@ -36,7 +36,9 @@ class Registry(dict[str, Obj]):
     @property
     def legacy_keys(self) -> set[str]:
         """Keys readable from old registries but unsafe as object-file names."""
-        return {key for key in self if not objdef.is_identifier(key) or key.lower() == "me"}
+        return {
+            key for key in self if not objdef.is_identifier(key) or key.lower() == "me"
+        }
 
 
 @dataclass
@@ -139,14 +141,18 @@ class Refs:
         # Prefer the shortest $name when several point at one object.
         self._sys_by_obj = {}
         for n, o in sorted(self.sysrefs.items(), key=lambda kv: (len(kv[0]), kv[0])):
-            if not isinstance(o.num, int) or o.num >= 0:  # $nothing, $ambiguous_match, $failed_match stay numbers
+            if (
+                not isinstance(o.num, int) or o.num >= 0
+            ):  # $nothing, $ambiguous_match, $failed_match stay numbers
                 self._sys_by_obj.setdefault(o, n)
 
 
 # ----- state file
 
 
-def save_state(path: Path, player: Obj, registry: dict[str, Obj], toolbox: Obj | None) -> None:
+def save_state(
+    path: Path, player: Obj, registry: dict[str, Obj], toolbox: Obj | None
+) -> None:
     generations = getattr(registry, "generations", {})
     data = {
         "player": player.num,

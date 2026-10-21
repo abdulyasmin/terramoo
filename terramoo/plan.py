@@ -11,17 +11,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import ObjectDef, PropDef, normalize
+from .model import ObjectDef, PropDef, VerbDef, normalize
 from .moolit import Obj, Ref, walk
 from .refs import Refs, UnresolvedRef
 
 
 @dataclass
 class Plan:
-    creates: list[tuple[str, object, str]] = field(default_factory=list)  # (key, parent, name)
-    gone: dict[str, Obj] = field(default_factory=dict)  # registry entries the MOO no longer has
+    creates: list[tuple[str, object, str]] = field(
+        default_factory=list
+    )  # (key, parent, name)
+    gone: dict[str, Obj] = field(
+        default_factory=dict
+    )  # registry entries the MOO no longer has
     ops: list[tuple] = field(default_factory=list)
-    destroys: dict[str, Obj] = field(default_factory=dict)  # orphan bindings at planning time
+    destroys: dict[str, Obj] = field(
+        default_factory=dict
+    )  # orphan bindings at planning time
     warnings: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
@@ -47,16 +53,26 @@ def _owner(refs: Refs, owner, *, live: bool = False):
     return refs.player if owner is None else refs.resolve_ref(owner, live=live)
 
 
-def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: Refs,
-          *, selected: set[str] | None = None, destroy_keys: set[str] | None = None) -> Plan:
+def build(
+    files: dict[str, ObjectDef],
+    live: dict[str, ObjectDef | None],
+    refs: Refs,
+    *,
+    selected: set[str] | None = None,
+    destroy_keys: set[str] | None = None,
+) -> Plan:
     plan = Plan()
     broken: set[str] = set()
     file_keys = _folded_names(files, "file keys")
     live_keys = _folded_names(live, "live keys")
-    selected_names = {key.lower() for key in selected} if selected is not None else set(file_keys)
+    selected_names = (
+        {key.lower() for key in selected} if selected is not None else set(file_keys)
+    )
     unknown = selected_names - set(file_keys)
     if unknown:
-        plan.problems.append(f"selected keys have no definition: {', '.join(sorted(unknown))}")
+        plan.problems.append(
+            f"selected keys have no definition: {', '.join(sorted(unknown))}"
+        )
     wanted = {key: obj for key, obj in files.items() if key.lower() in selected_names}
     for key in sorted(refs.legacy_keys):
         plan.warnings.append(
@@ -73,14 +89,20 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
     # A reference to a key with no file would dangle as soon as that key is
     # destroyed (or would never be created): say so before anything runs.
     for key, obj in files.items():
-        missing = sorted(n for n in _at_refs(obj) if n.lower() != "me" and n.lower() not in file_keys)
+        missing = sorted(
+            n for n in _at_refs(obj) if n.lower() != "me" and n.lower() not in file_keys
+        )
         if missing:
-            plan.problems.append(f"{key}: refers to {', '.join('@' + n for n in missing)}, which has no file")
+            plan.problems.append(
+                f"{key}: refers to {', '.join('@' + n for n in missing)}, which has no file"
+            )
             broken.add(key)
 
     # Creates, parents first.  A parent that is itself a new object is
     # passed by registry name; the helper resolves it from what it just made.
-    new_keys = [k for k in wanted if refs.registry_key(k) is None or live_for(k) is None]
+    new_keys = [
+        k for k in wanted if refs.registry_key(k) is None or live_for(k) is None
+    ]
     plan.gone = {
         target_for(k): refs.registry[refs.registry_key(k)]
         for k in new_keys
@@ -104,7 +126,11 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
             broken.add(key)
         if key in broken:
             continue
-        if isinstance(parent, Ref) and parent.kind == "@" and parent.name.lower() in {k.lower() for k in new_keys}:
+        if (
+            isinstance(parent, Ref)
+            and parent.kind == "@"
+            and parent.name.lower() in {k.lower() for k in new_keys}
+        ):
             parent_arg = target_for(file_keys[parent.name.lower()])
         else:
             try:
@@ -126,8 +152,13 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         current = live_for(key)
         try:
             ops = diff_object(
-                target_for(key), obj, current, refs,
-                was_exit=current_exits.get(key.lower(), wanted_exits.get(key.lower(), False)),
+                target_for(key),
+                obj,
+                current,
+                refs,
+                was_exit=current_exits.get(
+                    key.lower(), wanted_exits.get(key.lower(), False)
+                ),
                 will_exit=wanted_exits.get(key.lower(), False),
             )
         except (UnresolvedRef, ValueError) as e:
@@ -138,8 +169,10 @@ def build(files: dict[str, ObjectDef], live: dict[str, ObjectDef | None], refs: 
         elif current is not None:
             plan.unchanged.append(key)
 
-    allowed_destroy = {k.lower() for k in destroy_keys} if destroy_keys is not None else (
-        {k.lower() for k in refs.registry} if selected is None else set()
+    allowed_destroy = (
+        {k.lower() for k in destroy_keys}
+        if destroy_keys is not None
+        else ({k.lower() for k in refs.registry} if selected is None else set())
     )
     for key in refs.registry:
         if key.lower() not in file_keys and key.lower() in allowed_destroy:
@@ -154,7 +187,9 @@ def _folded_names(values, label: str) -> dict[str, str]:
     for name in values:
         key = name.lower()
         if key in folded:
-            raise ValueError(f"{label} {folded[key]!r} and {name!r} differ only in case")
+            raise ValueError(
+                f"{label} {folded[key]!r} and {name!r} differ only in case"
+            )
         folded[key] = name
     return folded
 
@@ -167,13 +202,21 @@ def _at_refs(obj: ObjectDef) -> set[str]:
             found.add(v.name)
         return v
 
-    for v in (obj.parent, obj.location, obj.owner, *(p.value for p in obj.props), *(p.owner for p in obj.props),
-              *(v.owner for v in obj.verbs)):
+    for v in (
+        obj.parent,
+        obj.location,
+        obj.owner,
+        *(p.value for p in obj.props),
+        *(p.owner for p in obj.props),
+        *(v.owner for v in obj.verbs),
+    ):
         walk(v, leaf)
     return found
 
 
-def _exit_classes(objects: dict[str, ObjectDef], refs: Refs, *, live: bool) -> dict[str, bool]:
+def _exit_classes(
+    objects: dict[str, ObjectDef], refs: Refs, *, live: bool
+) -> dict[str, bool]:
     """Classify managed objects from their declared parent chains."""
     by_name = {key.lower(): obj for key, obj in objects.items()}
     by_object = {obj: key.lower() for key, obj in refs.registry.items()}
@@ -220,10 +263,14 @@ def _topo(keys: list[str], files: dict[str, ObjectDef]) -> tuple[list[str], set[
             return
         folded_stack = [name.lower() for name in stack]
         if folded in folded_stack:
-            cyclic.update(stack[folded_stack.index(folded):])
+            cyclic.update(stack[folded_stack.index(folded) :])
             return
         parent = files[k].parent
-        if isinstance(parent, Ref) and parent.kind == "@" and parent.name.lower() in selected:
+        if (
+            isinstance(parent, Ref)
+            and parent.kind == "@"
+            and parent.name.lower() in selected
+        ):
             visit(by_name[parent.name.lower()], stack + [k])
         seen.add(folded)
         out.append(k)
@@ -293,7 +340,17 @@ def diff_object(
     def reconcile_endpoint(prop: PropDef, prop_name: str, value) -> bool:
         if prop.name.lower() in ("source", "dest"):
             old = refs.resolve(prop.value, live=True)
-            ops.append(("endpoint", target, prop_name, old, value, int(was_exit), int(will_exit)))
+            ops.append(
+                (
+                    "endpoint",
+                    target,
+                    prop_name,
+                    old,
+                    value,
+                    int(was_exit),
+                    int(will_exit),
+                )
+            )
             return True
         return False
 
@@ -306,10 +363,15 @@ def diff_object(
             if cur is None:
                 ops.append(("addprop", target, p.name, value, [owner, perms]))
             elif not cur.defined:
-                raise UnresolvedRef(f"property {p.name} is inherited on the MOO but `property` (defined) in the file")
+                raise UnresolvedRef(
+                    f"property {p.name} is inherited on the MOO but `property` (defined) in the file"
+                )
             else:
                 prop_name = cur.name
-                if (owner, perms) != (_owner(refs, cur.owner, live=True), normalize(cur.perms, "rwc")):
+                if (owner, perms) != (
+                    _owner(refs, cur.owner, live=True),
+                    normalize(cur.perms, "rwc"),
+                ):
                     info = [owner, perms]
                     if p.name != cur.name:
                         info.append(p.name)
@@ -327,7 +389,9 @@ def diff_object(
                         ops.append(("setprop", target, prop_name, value))
         else:
             if cur is not None and cur.defined:
-                raise UnresolvedRef(f"property {p.name} is defined on the MOO but `override` in the file")
+                raise UnresolvedRef(
+                    f"property {p.name} is defined on the MOO but `override` in the file"
+                )
             if (
                 cur is None
                 or value != refs.resolve(cur.value, live=True)
@@ -375,16 +439,25 @@ def diff_object(
     matched: set[int] = set()
     for v in want.verbs:
         group = verb_groups.get(v.key.lower(), [])
-        current = next(((position, verb) for position, verb in group if position not in matched), None)
+        current = next(
+            ((position, verb) for position, verb in group if position not in matched),
+            None,
+        )
         owner = _owner(refs, v.owner)
         perms = normalize(v.perms, "rwxd")
         if current is None:
-            ops.append(("addverb", target, [owner, perms, v.names], list(v.args), list(v.code)))
+            ops.append(
+                ("addverb", target, [owner, perms, v.names], list(v.args), list(v.code))
+            )
             continue
         position, cur = current
         matched.add(position)
         descriptor = verb_targets[position]
-        if (owner, perms, v.names) != (_owner(refs, cur.owner, live=True), normalize(cur.perms, "rwxd"), cur.names):
+        if (owner, perms, v.names) != (
+            _owner(refs, cur.owner, live=True),
+            normalize(cur.perms, "rwxd"),
+            cur.names,
+        ):
             ops.append(("verbinfo", target, descriptor, [owner, perms, v.names]))
         if tuple(v.args) != tuple(cur.args):
             ops.append(("verbargs", target, descriptor, list(v.args)))

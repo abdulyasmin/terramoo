@@ -85,9 +85,16 @@ def test_new_destination_must_be_inside_objects(tmp_path, into):
 def test_adopt_preflights_destination_before_remote_registration(tmp_path, monkeypatch):
     w = world(tmp_path)
     monkeypatch.setattr(w, "refs", lambda: Refs(Obj(1)))
-    monkeypatch.setattr(w, "eval", lambda *args: pytest.fail("remote registration attempted"))
+    monkeypatch.setattr(
+        w, "eval", lambda *args: pytest.fail("remote registration attempted")
+    )
     with pytest.raises(MooError, match="relative to objects"):
-        cli._adopt_locked(w, SimpleNamespace(owned=False, verify=False, object="#10", key="hall", into="../escape"))
+        cli._adopt_locked(
+            w,
+            SimpleNamespace(
+                owned=False, verify=False, object="#10", key="hall", into="../escape"
+            ),
+        )
 
 
 def test_recovery_will_not_clean_up_an_unrelated_temporary_file(tmp_path):
@@ -95,5 +102,7 @@ def test_recovery_will_not_clean_up_an_unrelated_temporary_file(tmp_path):
     path = w.objects_dir / ".notes.tmp"
     path.write_text("user content")
     with pytest.raises(MooError, match="unsafe temporary-file path"):
-        cli._recovery_temp_paths(w, {"schema_version": 1, "preserved_temporary_files": [str(path)]})
+        cli._recovery_temp_paths(
+            w, {"schema_version": 1, "preserved_temporary_files": [str(path)]}
+        )
     assert path.read_text() == "user content"

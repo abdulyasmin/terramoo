@@ -45,11 +45,14 @@ class AdoptWorld:
         self.saved.append(dict(registry))
 
 
-@pytest.mark.parametrize("text, obj", [
-    ("#123", Obj(123)),
-    ("123", Obj(123)),
-    ("#048D05-1234567890", Obj("048D05-1234567890")),
-])
+@pytest.mark.parametrize(
+    "text, obj",
+    [
+        ("#123", Obj(123)),
+        ("123", Obj(123)),
+        ("#048D05-1234567890", Obj("048D05-1234567890")),
+    ],
+)
 def test_object_argument(text, obj):
     assert parse_object_arg(text) == obj
 
@@ -67,7 +70,9 @@ def test_apply_confirmation_refusal_sends_nothing(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_world", lambda args: world)
     monkeypatch.setattr(cli, "_plan", lambda w: (refs, {}, pending))
     monkeypatch.setattr("builtins.input", lambda prompt: "no")
-    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran"))
+    monkeypatch.setattr(
+        cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran")
+    )
 
     cli.cmd_apply(SimpleNamespace(yes=False, destroy=True))
     assert capsys.readouterr().out.endswith("aborted\n")
@@ -76,7 +81,9 @@ def test_apply_confirmation_refusal_sends_nothing(monkeypatch, capsys):
 def test_confirmed_apply_forwards_the_destroy_flag(monkeypatch, capsys):
     world = SimpleNamespace()
     refs = Refs(player=Obj(1), registry={"hall": Obj(2)})
-    pending = Plan(ops=[("name", Ref("@", "hall"), "Great Hall")], destroys={"old": Obj(3)})
+    pending = Plan(
+        ops=[("name", Ref("@", "hall"), "Great Hall")], destroys={"old": Obj(3)}
+    )
     seen = {}
     monkeypatch.setattr(cli, "_world", lambda args: world)
     monkeypatch.setattr(cli, "_plan", lambda w: (refs, {"hall": object()}, pending))
@@ -102,8 +109,12 @@ def test_apply_problems_abort_before_confirmation_or_mutation(monkeypatch, capsy
     )
     monkeypatch.setattr(cli, "_world", lambda args: world)
     monkeypatch.setattr(cli, "_plan", lambda w: (refs, {}, unsafe))
-    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked for confirmation"))
-    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran"))
+    monkeypatch.setattr(
+        "builtins.input", lambda prompt: pytest.fail("asked for confirmation")
+    )
+    monkeypatch.setattr(
+        cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply ran")
+    )
 
     with pytest.raises(MooError, match="fix the problems above first"):
         cli.cmd_apply(SimpleNamespace(yes=True, destroy=True))
@@ -142,10 +153,12 @@ def test_plan_exports_the_case_matching_registry_binding(monkeypatch):
     assert pending.unchanged == ["hall"]
 
 
-def test_status_reports_each_legacy_registry_key_with_rename_command(monkeypatch, capsys):
+def test_status_reports_each_legacy_registry_key_with_rename_command(
+    monkeypatch, capsys
+):
     refs = Refs(
         player=Obj(1),
-        registry=registry_value([["bad-key", "مرحبا"], [Obj(10), Obj(11)]])
+        registry=registry_value([["bad-key", "مرحبا"], [Obj(10), Obj(11)]]),
     )
     world = SimpleNamespace(
         name="test",
@@ -153,7 +166,7 @@ def test_status_reports_each_legacy_registry_key_with_rename_command(monkeypatch
         player_name="alice",
         toolbox=Obj(99),
         refs=lambda: refs,
-        load_files=lambda: {},
+        load_files=dict,
         server_info=lambda: ([], "FakeMOO"),
     )
     monkeypatch.setattr(cli, "_world", lambda args: world)
@@ -193,7 +206,9 @@ def test_rename_key_renames_an_existing_local_object_file(tmp_path, monkeypatch)
     assert json.loads(world.state_path.read_text())["registry"] == {"new_key": 10}
 
 
-def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, after_rename=None):
+def _rename_world(
+    tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, after_rename=None
+):
     world = World("test", tmp_path, "alice", {})
     world.objects_dir.mkdir(parents=True)
     world._player = Obj(1)
@@ -201,7 +216,11 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, a
     world._transport = SimpleNamespace(serialize=moolit.serialize)
     raw_registry = [[old], [Obj(10)], ["generation-10"], 0]
     sent = []
-    monkeypatch.setattr(world, "refs", lambda: Refs(player=Obj(1), registry=registry_value(raw_registry)))
+    monkeypatch.setattr(
+        world,
+        "refs",
+        lambda: Refs(player=Obj(1), registry=registry_value(raw_registry)),
+    )
     monkeypatch.setattr(world, "require_helper_version", lambda: None)
     monkeypatch.setattr(world, "helper", lambda verb, arg: (verb, arg))
 
@@ -217,7 +236,11 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, a
         if isinstance(selector, int):
             index = selector - 1
         else:  # the pre-fix operation names the old key directly
-            index = next(i for i, key in enumerate(raw_registry[0]) if key.lower() == selector.lower())
+            index = next(
+                i
+                for i, key in enumerate(raw_registry[0])
+                if key.lower() == selector.lower()
+            )
         if fail_reverse and len(sent) > 1:
             return [[0, "E_PERM", "reverse refused"]]
         assert raw_registry[1][index] == expected
@@ -238,17 +261,19 @@ def _rename_world(tmp_path, monkeypatch, old="old_key", *, fail_reverse=False, a
 def _write_rename_recovery_journal(world, old="old_key", new="new_key"):
     journal = world.state_path.with_name("state.json.rename-recovery.json")
     journal.write_text(
-        json.dumps({
-            "phase": "remote-outcome-unknown",
-            "old_key": old,
-            "new_key": new,
-            "object": "#10",
-            "generation": "generation-10",
-            "registry_index": 1,
-            "registry_revision": 0,
-            "preserved_temporary_files": [],
-            "recovery_commands": ["tmoo rename-key --recover"],
-        })
+        json.dumps(
+            {
+                "phase": "remote-outcome-unknown",
+                "old_key": old,
+                "new_key": new,
+                "object": "#10",
+                "generation": "generation-10",
+                "registry_index": 1,
+                "registry_revision": 0,
+                "preserved_temporary_files": [],
+                "recovery_commands": ["tmoo rename-key --recover"],
+            }
+        )
     )
     return journal
 
@@ -256,21 +281,23 @@ def _write_rename_recovery_journal(world, old="old_key", new="new_key"):
 def test_rename_key_rewrites_every_parsed_reference(tmp_path, monkeypatch):
     world, raw_registry, _ = _rename_world(tmp_path, monkeypatch)
     world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
-    world.write_file(ObjectDef(
-        key="hall",
-        name="Hall",
-        parent=Ref("@", "OLD_KEY"),
-        location=Ref("@", "old_key"),
-        owner=Ref("@", "old_key"),
-        props=[
-            PropDef(
-                "links",
-                Map({Ref("@", "old_key"): [Ref("@", "OLD_KEY")]}),
-                owner=Ref("@", "old_key"),
-            ),
-        ],
-        verbs=[VerbDef("look", ["return 1;"], owner=Ref("@", "old_key"))],
-    ))
+    world.write_file(
+        ObjectDef(
+            key="hall",
+            name="Hall",
+            parent=Ref("@", "OLD_KEY"),
+            location=Ref("@", "old_key"),
+            owner=Ref("@", "old_key"),
+            props=[
+                PropDef(
+                    "links",
+                    Map({Ref("@", "old_key"): [Ref("@", "OLD_KEY")]}),
+                    owner=Ref("@", "old_key"),
+                ),
+            ],
+            verbs=[VerbDef("look", ["return 1;"], owner=Ref("@", "old_key"))],
+        )
+    )
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
     cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
@@ -288,7 +315,9 @@ def test_rename_key_rewrites_every_parsed_reference(tmp_path, monkeypatch):
     assert hall.verbs[0].owner == Ref("@", "new_key")
 
 
-def test_rename_key_reverses_remote_change_when_local_finalization_fails(tmp_path, monkeypatch):
+def test_rename_key_reverses_remote_change_when_local_finalization_fails(
+    tmp_path, monkeypatch
+):
     world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
     world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
     world.state_path.write_text("old state\n")
@@ -302,7 +331,9 @@ def test_rename_key_reverses_remote_change_when_local_finalization_fails(tmp_pat
     monkeypatch.setattr(type(world.state_path), "replace", fail_state_replace)
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
-    with pytest.raises(MooError, match="local rename failed.*remote rename was reversed"):
+    with pytest.raises(
+        MooError, match="local rename failed.*remote rename was reversed"
+    ):
         cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
 
     assert len(sent) == 2
@@ -411,7 +442,10 @@ def test_rename_key_recovery_confirms_remote_reversal_and_preserves_edit(
     cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
 
     assert raw_registry[0] == ["old_key"]
-    assert objdef.parse(world.file_for("old_key").read_text()).name == "Edited concurrently"
+    assert (
+        objdef.parse(world.file_for("old_key").read_text()).name
+        == "Edited concurrently"
+    )
     assert not world.state_path.with_name("state.json.rename-recovery.json").exists()
     assert list(world.dir.rglob("*.tmp")) == []
 
@@ -438,19 +472,27 @@ def test_rename_key_recovery_rechecks_each_source_immediately_before_replace(
     def inject_edit_after_first_replace(path, target):
         nonlocal injected
         result = original_replace(path, target)
-        if not injected and target == world.file_for("new_key") and ".recover." in path.name:
+        if (
+            not injected
+            and target == world.file_for("new_key")
+            and ".recover." in path.name
+        ):
             injected = True
             world.file_for("z_hall").write_text(objdef.render(edited))
         return result
 
-    monkeypatch.setattr(type(world.state_path), "replace", inject_edit_after_first_replace)
+    monkeypatch.setattr(
+        type(world.state_path), "replace", inject_edit_after_first_replace
+    )
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
     with pytest.raises(MooError, match="z_hall.moo changed after it was read"):
         cli.cmd_rename_key(SimpleNamespace(old=None, new=None, recover=True))
 
     assert injected
-    assert objdef.parse(world.file_for("z_hall").read_text()).name == "Edited concurrently"
+    assert (
+        objdef.parse(world.file_for("z_hall").read_text()).name == "Edited concurrently"
+    )
     assert journal.exists()
 
 
@@ -516,13 +558,9 @@ def test_rename_key_recovery_collapses_two_file_case_only_crash_state(
     monkeypatch.setattr(world, "file_for", simulated_case_sensitive_file_for)
     journal = _write_rename_recovery_journal(world, new="OLD_KEY")
     record = json.loads(journal.read_text())
-    registry = registry_value(
-        [["OLD_KEY"], [Obj(10)], ["generation-10"], 1]
-    )
+    registry = registry_value([["OLD_KEY"], [Obj(10)], ["generation-10"], 1])
 
-    cli._recover_local_migration(
-        world, journal, record, "old_key", "OLD_KEY", registry
-    )
+    cli._recover_local_migration(world, journal, record, "old_key", "OLD_KEY", registry)
 
     assert not old_path.exists()
     assert objdef.parse(new_path.read_text()) == new
@@ -558,7 +596,9 @@ def test_rename_key_recovery_accepts_semantically_equal_authored_destination(
     assert not journal.exists()
 
 
-def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(tmp_path, monkeypatch):
+def test_rename_key_addresses_non_ascii_legacy_key_by_registry_index(
+    tmp_path, monkeypatch
+):
     world, raw_registry, sent = _rename_world(tmp_path, monkeypatch, old="مرحبا")
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
@@ -581,7 +621,9 @@ def test_rename_key_rejects_an_interleaved_remote_rename(tmp_path, monkeypatch):
             raw_registry[0][0] = "other"
             raw_registry[3] += 1
 
-    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=interleave)
+    world, raw_registry, _ = _rename_world(
+        tmp_path, monkeypatch, after_rename=interleave
+    )
     # Simulate process B changing only the key immediately before process A's CAS.
     original_eval = world.eval
 
@@ -610,7 +652,9 @@ def test_rename_key_finalizes_after_a_lost_success_response(tmp_path, monkeypatc
             )
             raise MooError("connection lost after write")
 
-    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=lose_response)
+    world, raw_registry, _ = _rename_world(
+        tmp_path, monkeypatch, after_rename=lose_response
+    )
     world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
@@ -630,7 +674,9 @@ def test_rename_key_preserves_an_edit_made_after_parsing(tmp_path, monkeypatch):
         if call_number == 1:
             world.file_for("old_key").write_text(objdef.render(edited))
 
-    world, raw_registry, _ = _rename_world(tmp_path, monkeypatch, after_rename=edit_source)
+    world, raw_registry, _ = _rename_world(
+        tmp_path, monkeypatch, after_rename=edit_source
+    )
     world.write_file(ObjectDef(key="old_key", name="Original", parent=Obj(2)))
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
@@ -638,11 +684,16 @@ def test_rename_key_preserves_an_edit_made_after_parsing(tmp_path, monkeypatch):
         cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key"))
 
     assert raw_registry[0] == ["old_key"]
-    assert objdef.parse(world.file_for("old_key").read_text()).name == "Edited concurrently"
+    assert (
+        objdef.parse(world.file_for("old_key").read_text()).name
+        == "Edited concurrently"
+    )
     assert world.state_path.with_name("state.json.rename-recovery.json").exists()
 
 
-def test_rename_key_detects_an_edit_to_an_initially_unaffected_file(tmp_path, monkeypatch):
+def test_rename_key_detects_an_edit_to_an_initially_unaffected_file(
+    tmp_path, monkeypatch
+):
     edited = ObjectDef(
         key="hall",
         name="Edited concurrently",
@@ -661,7 +712,9 @@ def test_rename_key_detects_an_edit_to_an_initially_unaffected_file(tmp_path, mo
     world.write_file(ObjectDef(key="hall", name="Hall", parent=Obj(2)))
     monkeypatch.setattr(cli, "_world", lambda args: world)
 
-    with pytest.raises(MooError, match="hall.moo changed after it was read.*recovery journal"):
+    with pytest.raises(
+        MooError, match="hall.moo changed after it was read.*recovery journal"
+    ):
         cli.cmd_rename_key(SimpleNamespace(old="old_key", new="new_key", recover=False))
 
     assert raw_registry[0] == ["old_key"]
@@ -692,7 +745,9 @@ def test_pull_and_rename_key_share_the_world_write_lock(tmp_path, monkeypatch):
             cli.cmd_pull(SimpleNamespace(keys=[]))
 
 
-def test_rename_key_rejects_case_folded_destination_file_collision(tmp_path, monkeypatch):
+def test_rename_key_rejects_case_folded_destination_file_collision(
+    tmp_path, monkeypatch
+):
     world, raw_registry, sent = _rename_world(tmp_path, monkeypatch)
     world.write_file(ObjectDef(key="old_key", name="Old", parent=Obj(2)))
     world.write_file(ObjectDef(key="NEW_KEY", name="Unrelated", parent=Obj(2)))
@@ -728,7 +783,7 @@ def test_rename_key_allows_its_source_file_in_a_case_only_rename(tmp_path, monke
 def test_pull_skips_legacy_keys_without_building_a_file_path(monkeypatch, capsys):
     refs = Refs(
         player=Obj(1),
-        registry=registry_value([["hall", "../outside"], [Obj(10), Obj(11)]])
+        registry=registry_value([["hall", "../outside"], [Obj(10), Obj(11)]]),
     )
     world = SimpleNamespace(
         objects_dir=SimpleNamespace(glob=lambda pattern: []),
@@ -746,7 +801,11 @@ def test_destroy_rejects_case_colliding_registry_before_any_mutation(monkeypatch
         load_files=lambda: pytest.fail("files loaded after malformed registry"),
     )
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli.apply_mod, "run", lambda *args, **kwargs: pytest.fail("apply mutated the MOO"))
+    monkeypatch.setattr(
+        cli.apply_mod,
+        "run",
+        lambda *args, **kwargs: pytest.fail("apply mutated the MOO"),
+    )
 
     with pytest.raises(MooError, match="toolbox has a malformed registry"):
         cli.cmd_apply(SimpleNamespace(yes=True, destroy=True))
@@ -814,7 +873,14 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
         _, arg = call
         results = []
         for _, key, obj, nonce in moolit.parse(arg):
-            existing = next((i for i, old in enumerate(world.raw_registry[0]) if old.lower() == key.lower()), None)
+            existing = next(
+                (
+                    i
+                    for i, old in enumerate(world.raw_registry[0])
+                    if old.lower() == key.lower()
+                ),
+                None,
+            )
             if existing is None:
                 world.raw_registry[0].append(key)
                 world.raw_registry[1].append(obj)
@@ -828,7 +894,11 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
     world.reply = register
     exported = []
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys))
+    monkeypatch.setattr(
+        cli,
+        "_write_exports",
+        lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys),
+    )
 
     cli.cmd_adopt(SimpleNamespace(owned=True, object=None, key=None))
 
@@ -843,7 +913,9 @@ def test_adopt_owned_avoids_case_colliding_registry_keys(tmp_path, monkeypatch):
 def test_adopt_refuses_to_rebind_an_occupied_key(monkeypatch, key):
     world = AdoptWorld({"hall": Obj(10)})
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda *args: pytest.fail("occupied key was exported"))
+    monkeypatch.setattr(
+        cli, "_write_exports", lambda *args: pytest.fail("occupied key was exported")
+    )
 
     with pytest.raises(MooError, match=rf"{key} is already #10"):
         cli.cmd_adopt(SimpleNamespace(owned=False, object="#11", key=key))
@@ -863,7 +935,11 @@ def test_adopt_failed_registration_exports_nothing_and_raises(monkeypatch):
     world.reply = reject
     exported = []
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys))
+    monkeypatch.setattr(
+        cli,
+        "_write_exports",
+        lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys),
+    )
 
     with pytest.raises(MooError, match="adoption failed"):
         cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
@@ -884,7 +960,11 @@ def test_adopt_exports_the_registry_spelling_after_a_success(monkeypatch):
     world.reply = succeed
     exported = []
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys))
+    monkeypatch.setattr(
+        cli,
+        "_write_exports",
+        lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys),
+    )
 
     cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
 
@@ -905,7 +985,11 @@ def test_adopt_verify_stamps_an_existing_legacy_binding(monkeypatch):
     world.reply = verify
     exported = []
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys))
+    monkeypatch.setattr(
+        cli,
+        "_write_exports",
+        lambda w, refs, keys, **kwargs: exported.extend(keys) or len(keys),
+    )
 
     cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="hall", verify=True))
 
@@ -933,7 +1017,9 @@ def test_adopt_verify_preserves_local_edits_but_plain_adopt_rewrites(
         return [[1, obj]]
 
     def export(w, refs, keys):
-        return {key: ObjectDef(key=key, name="Live hall", parent=Obj(2)) for key in keys}
+        return {
+            key: ObjectDef(key=key, name="Live hall", parent=Obj(2)) for key in keys
+        }
 
     world.reply = register
     monkeypatch.setattr(cli, "_world", lambda args: world)
@@ -948,7 +1034,9 @@ def test_adopt_verify_preserves_local_edits_but_plain_adopt_rewrites(
 
     path.rename(path.with_name(f"{file_key}.moo"))
     path = files.file_for(file_key)
-    desired = objdef.render(ObjectDef(key=file_key, name="Unapplied local edit", parent=Obj(2)))
+    desired = objdef.render(
+        ObjectDef(key=file_key, name="Unapplied local edit", parent=Obj(2))
+    )
     desired_bytes = desired.replace("\n", "\r\n").encode()
     path.write_bytes(desired_bytes)
     world.raw_registry = [["hall"], [Obj(10)]]
@@ -959,7 +1047,11 @@ def test_adopt_verify_preserves_local_edits_but_plain_adopt_rewrites(
     assert world.raw_registry[:2] == [["hall"], [Obj(10)]]
     assert world.raw_registry[2][0]
     assert world.saved[-1] == {"hall": Obj(10)}
-    kept = [line for line in capsys.readouterr().out.splitlines() if "local definition kept" in line]
+    kept = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "local definition kept" in line
+    ]
     assert kept == [
         f"  {file_key}.moo: local definition kept; `tmoo plan` shows any difference from the live object"
     ]
@@ -985,7 +1077,9 @@ def test_adopt_file_created_after_snapshot(tmp_path, monkeypatch, capsys, verify
     world.objects_dir = files.objects_dir
     world.write_file = files.write_file
     path = files.file_for("hall")
-    desired = objdef.render(ObjectDef(key="hall", name="Restored local edit", parent=Obj(2)))
+    desired = objdef.render(
+        ObjectDef(key="hall", name="Restored local edit", parent=Obj(2))
+    )
     desired_bytes = desired.replace("\n", "\r\n").encode()
     file_for = files.file_for
     created = []
@@ -1009,9 +1103,13 @@ def test_adopt_file_created_after_snapshot(tmp_path, monkeypatch, capsys, verify
     monkeypatch.setattr(files, "file_for", create_after_snapshot)
     world.file_for = files.file_for
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli.export_mod, "export", lambda w, refs, keys: {
-        "hall": ObjectDef(key="hall", name="Live hall", parent=Obj(2))
-    })
+    monkeypatch.setattr(
+        cli.export_mod,
+        "export",
+        lambda w, refs, keys: {
+            "hall": ObjectDef(key="hall", name="Live hall", parent=Obj(2))
+        },
+    )
     write_exports = cli._write_exports
     written = []
 
@@ -1029,9 +1127,12 @@ def test_adopt_file_created_after_snapshot(tmp_path, monkeypatch, capsys, verify
     output = capsys.readouterr().out
     if verify:
         assert path.read_bytes() == desired_bytes
-        assert output.splitlines().count(
-            "  hall.moo: local definition kept; `tmoo plan` shows any difference from the live object"
-        ) == 1
+        assert (
+            output.splitlines().count(
+                "  hall.moo: local definition kept; `tmoo plan` shows any difference from the live object"
+            )
+            == 1
+        )
     else:
         assert objdef.parse(path.read_text()).name == "Live hall"
         assert path.read_bytes() != desired_bytes
@@ -1042,7 +1143,11 @@ def test_adopt_file_created_after_snapshot(tmp_path, monkeypatch, capsys, verify
 def test_adopt_rejects_malformed_helper_results(reply, monkeypatch):
     world = AdoptWorld(reply=reply)
     monkeypatch.setattr(cli, "_world", lambda args: world)
-    monkeypatch.setattr(cli, "_write_exports", lambda *args: pytest.fail("malformed registration was exported"))
+    monkeypatch.setattr(
+        cli,
+        "_write_exports",
+        lambda *args: pytest.fail("malformed registration was exported"),
+    )
 
     with pytest.raises(MooError, match="adoption failed"):
         cli.cmd_adopt(SimpleNamespace(owned=False, object="#10", key="mine"))
@@ -1050,7 +1155,9 @@ def test_adopt_rejects_malformed_helper_results(reply, monkeypatch):
     assert world.saved == [{}]
 
 
-def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monkeypatch):
+def test_pull_keeps_existing_property_order_when_rewriting_a_file(
+    tmp_path, monkeypatch
+):
     w = World("test", tmp_path, "alice", {})
     w.objects_dir.mkdir(parents=True)
     existing = ObjectDef(
@@ -1066,8 +1173,12 @@ def test_pull_keeps_existing_property_order_when_rewriting_a_file(tmp_path, monk
         parent=Ref("$", "room"),
         props=[PropDef("c", 3), PropDef("new", 2), PropDef("a", 1)],
     )
-    monkeypatch.setattr(cli.export_mod, "export", lambda world, refs, keys: {"hall": live})
+    monkeypatch.setattr(
+        cli.export_mod, "export", lambda world, refs, keys: {"hall": live}
+    )
 
-    assert cli._write_exports(w, SimpleNamespace(registry={"hall": Obj(2)}), ["hall"]) == 1
+    assert (
+        cli._write_exports(w, SimpleNamespace(registry={"hall": Obj(2)}), ["hall"]) == 1
+    )
     written = objdef.parse(w.file_for("hall").read_text())
     assert [prop.name for prop in written.props] == ["a", "c", "new"]

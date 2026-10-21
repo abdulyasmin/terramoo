@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import difflib
 import fcntl
 import getpass
@@ -11,22 +10,23 @@ import json
 import os
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
 from . import apply as apply_mod
+from . import deployment, moolit, objdef
 from . import export as export_mod
-from . import moolit, objdef
 from . import plan as plan_mod
-from . import deployment
 from .catalog import discover, object_paths, safe_path
 from .errors import MooError
 from .model import ordered_like
 from .moolit import Obj, Ref, walk
-from .refs import Registry, save_state as write_state
+from .refs import Registry
+from .refs import save_state as write_state
 from .secrets import check_secret, store_secret
-from .world import World, find_root, validate_key
 from .storage import journal_path
+from .world import World, find_root, validate_key
 
 _open: list[World] = []
 
@@ -71,12 +71,20 @@ def cmd_init(args):
         where = args.url
     else:
         if not args.host:
-            raise MooError("give --host (and --port, --tls) for telnet, or --url for mcp")
+            raise MooError(
+                "give --host (and --port, --tls) for telnet, or --url for mcp"
+            )
         conn = f'transport = "telnet"\nhost = "{args.host}"\nport = {args.port}\ntls = {"true" if args.tls else "false"}\n'
         where = f"{args.host}:{args.port}"
     (d / "objects").mkdir(parents=True, exist_ok=True)
-    (d / "world.toml").write_text(WORLD_TOML.format(name=args.name, where=where, player=args.player, connection=conn))
-    print(f"wrote {d / 'world.toml'}; next: `tmoo secret store {args.name}`, then `tmoo -w {args.name} bootstrap`")
+    (d / "world.toml").write_text(
+        WORLD_TOML.format(
+            name=args.name, where=where, player=args.player, connection=conn
+        )
+    )
+    print(
+        f"wrote {d / 'world.toml'}; next: `tmoo secret store {args.name}`, then `tmoo -w {args.name} bootstrap`"
+    )
 
 
 def cmd_secret(args):
@@ -99,11 +107,19 @@ def _bootstrap_locked(w: World) -> None:
 def cmd_status(args):
     w = _world(args)
     with _world_write_lock(w, shared=True, recovery=True):
-        if isinstance(w, World) and (journal := w.state_path.with_name("state.json.rename-recovery.json")).exists():
-            print(f"unfinished rename journal: {journal}; run tmoo rename-key --recover")
+        if (
+            isinstance(w, World)
+            and (
+                journal := w.state_path.with_name("state.json.rename-recovery.json")
+            ).exists()
+        ):
+            print(
+                f"unfinished rename journal: {journal}; run tmoo rename-key --recover"
+            )
             return
         if isinstance(w, World):
             from .ownership import operation_path
+
             if (w.dir / ".player/operation.json").exists():
                 print("unfinished player operation; run tmoo player recover")
                 return
@@ -118,15 +134,20 @@ def _status_locked(w: World, args):
     files = w.load_files()
     selected = None
     if deployment.has_selectors(args):
-        _, selected = deployment.selected_keys(w, args, files, with_deps=getattr(args, "with_deps", False))
+        _, selected = deployment.selected_keys(
+            w, args, files, with_deps=getattr(args, "with_deps", False)
+        )
         files = {k: v for k, v in files.items() if k.lower() in selected}
     owned, version = w.server_info()
-    print(f"world {w.name}: {w.describe()} ({version or 'unknown server'}) as {w.player_name} ({refs.player}), toolbox {w.toolbox}")
+    print(
+        f"world {w.name}: {w.describe()} ({version or 'unknown server'}) as {w.player_name} ({refs.player}), toolbox {w.toolbox}"
+    )
     print(f"registry: {len(refs.registry)} objects, files: {len(files)}")
     if isinstance(w, World) and (w.dir / "player.moo").exists():
         print("player.moo: selected player fields; use tmoo player plan/apply")
     if isinstance(w, World) and (w.dir / "packages.lock.json").exists():
         from .views import status
+
         status(w, selected)
     for key, o in sorted(refs.registry.items()):
         if selected is not None and key.lower() not in selected:
@@ -146,13 +167,15 @@ def _status_locked(w: World, args):
     if selected is not None:
         return
     if owned is None:
-        print("(this core keeps no owned_objects list, so unmanaged objects are not listed)")
+        print(
+            "(this core keeps no owned_objects list, so unmanaged objects are not listed)"
+        )
         return
     stray = _stray(w, refs, owned)
     if stray:
         print("owned but unmanaged (`tmoo adopt <#n> <key>` or `tmoo adopt --owned`):")
         for o, n in zip(stray, w.names(stray)):
-            print(f"  {str(o):>6}  {n}")
+            print(f"  {o!s:>6}  {n}")
 
 
 def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
@@ -160,7 +183,9 @@ def _stray(w: World, refs, owned: list[Obj]) -> list[Obj]:
     return [o for o in owned if o not in known]
 
 
-def _write_exports(w: World, refs, keys, *, keep_existing: bool = False, into: str | None = None) -> int:
+def _write_exports(
+    w: World, refs, keys, *, keep_existing: bool = False, into: str | None = None
+) -> int:
     """Write live definitions, optionally keeping local files; return the count written."""
     safe_keys = []
     for key in keys:
@@ -176,7 +201,9 @@ def _write_exports(w: World, refs, keys, *, keep_existing: bool = False, into: s
     if not keys:
         return 0
     live = export_mod.export(w, refs, keys)
-    existing = {name: path.stem for name, path in discover(w.objects_dir).by_key().items()}
+    existing = {
+        name: path.stem for name, path in discover(w.objects_dir).by_key().items()
+    }
     written = 0
     for key in keys:
         actual_key = _registry_key(refs, key) or key
@@ -195,7 +222,9 @@ def _write_exports(w: World, refs, keys, *, keep_existing: bool = False, into: s
                 # On case-sensitive filesystems it cannot detect a concurrent
                 # file differing only in case; the snapshot covers earlier ones.
                 try:
-                    w.write_file(obj, exclusive=True, **({"into": into} if into else {}))
+                    w.write_file(
+                        obj, exclusive=True, **({"into": into} if into else {})
+                    )
                 except FileExistsError:
                     pass
                 else:
@@ -227,7 +256,9 @@ def cmd_pull(args):
 def _pull_locked(w: World, args) -> None:
     refs = w.refs()
     if deployment.has_selectors(args):
-        _, selected = deployment.selected_keys(w, args, with_deps=getattr(args, "with_deps", False), allow_missing=True)
+        _, selected = deployment.selected_keys(
+            w, args, with_deps=getattr(args, "with_deps", False), allow_missing=True
+        )
         requested = sorted(k for k in refs.registry if k.lower() in selected)
         for key in sorted(selected - {k.lower() for k in refs.registry}):
             print(f"  {key}: not created yet; local definition kept")
@@ -239,9 +270,15 @@ def _pull_locked(w: World, args) -> None:
     keys = [refs.registry_key(key) for key in requested]
     if _structured_world(w, args):
         from .views import pull
+
         written = pull(w, refs, keys, into=getattr(args, "into", None))
     else:
-        written = _write_exports(w, refs, keys, **({"into": args.into} if getattr(args, "into", None) else {}))
+        written = _write_exports(
+            w,
+            refs,
+            keys,
+            **({"into": args.into} if getattr(args, "into", None) else {}),
+        )
     w.save_state(refs.snapshot())
     print(f"wrote {written} file(s) under {w.objects_dir.relative_to(w.root)}")
 
@@ -257,13 +294,19 @@ def _adopt_locked(w: World, args) -> None:
     new: list[tuple[str, Obj]] = []
     verify = getattr(args, "verify", False)
     if verify and args.owned:
-        raise MooError("--verify is only for one existing binding: tmoo adopt <#n> <key> --verify")
+        raise MooError(
+            "--verify is only for one existing binding: tmoo adopt <#n> <key> --verify"
+        )
     if args.owned:
         owned = w.server_info()[0]
         if owned is None:
-            raise MooError("this core keeps no owned_objects list; adopt objects one at a time: tmoo adopt <#n> <key>")
+            raise MooError(
+                "this core keeps no owned_objects list; adopt objects one at a time: tmoo adopt <#n> <key>"
+            )
         stray = _stray(w, refs, owned)
-        taken = {key.lower() for key in refs.registry} | {p.stem.lower() for p in object_paths(w.objects_dir)}
+        taken = {key.lower() for key in refs.registry} | {
+            p.stem.lower() for p in object_paths(w.objects_dir)
+        }
         for o, n in zip(stray, w.names(stray)):
             new.append((export_mod.slug(n, taken), o))
     else:
@@ -271,13 +314,23 @@ def _adopt_locked(w: World, args) -> None:
             raise MooError("usage: tmoo adopt <#n> <key>  |  tmoo adopt --owned")
         o = parse_object_arg(args.object)
         if o == refs.player or o == getattr(w, "_toolbox", None):
-            raise MooError("players and the toolbox cannot be adopted; use tmoo player track")
+            raise MooError(
+                "players and the toolbox cannot be adopted; use tmoo player track"
+            )
         requested_key = validate_key(args.key)
-        existing_key = next((key for key in refs.registry if key.lower() == requested_key.lower()), None)
+        existing_key = next(
+            (key for key in refs.registry if key.lower() == requested_key.lower()), None
+        )
         if verify:
             if existing_key is None or refs.registry[existing_key] != o:
-                actual = refs.registry.get(existing_key) if existing_key is not None else "not registered"
-                raise MooError(f"cannot verify {requested_key} as {o}: current binding is {actual}")
+                actual = (
+                    refs.registry.get(existing_key)
+                    if existing_key is not None
+                    else "not registered"
+                )
+                raise MooError(
+                    f"cannot verify {requested_key} as {o}: current binding is {actual}"
+                )
             new.append((existing_key, o))
         elif existing_key is not None:
             raise MooError(f"{requested_key} is already {refs.registry[existing_key]}")
@@ -294,9 +347,15 @@ def _adopt_locked(w: World, args) -> None:
             destination = w.file_for(key, into=getattr(args, "into", None))
             if (w.dir / "packages.lock.json").exists():
                 from .installation import Store
+
                 store = Store(w)
-                if any(destination.is_relative_to(w.objects_dir / "packages" / name) for name in store.instances):
-                    raise MooError("adopt into a standalone directory, then use package import")
+                if any(
+                    destination.is_relative_to(w.objects_dir / "packages" / name)
+                    for name in store.instances
+                ):
+                    raise MooError(
+                        "adopt into a standalone directory, then use package import"
+                    )
     if hasattr(w, "require_helper_version"):
         w.require_helper_version()
     registrations = [(k, o, uuid4().hex) for k, o in new]
@@ -317,7 +376,13 @@ def _adopt_locked(w: World, args) -> None:
         if i >= len(results):
             continue
         res = results[i]
-        if isinstance(res, list) and len(res) == 2 and type(res[0]) is int and res[0] == 1 and res[1] == o:
+        if (
+            isinstance(res, list)
+            and len(res) == 2
+            and type(res[0]) is int
+            and res[0] == 1
+            and res[1] == o
+        ):
             successful.append((k, o, nonce))
         elif (
             isinstance(res, list)
@@ -338,21 +403,32 @@ def _adopt_locked(w: World, args) -> None:
     export_keys = []
     for requested, obj, nonce in successful:
         actual = next(
-            (key for key, registered in refs.registry.items()
-             if key.lower() == requested.lower()
-             and registered == obj
-             and refs.generations.get(key) == nonce),
+            (
+                key
+                for key, registered in refs.registry.items()
+                if key.lower() == requested.lower()
+                and registered == obj
+                and refs.generations.get(key) == nonce
+            ),
             None,
         )
         if actual is None:
-            problem = f"{requested}: successful registration is absent from the registry"
+            problem = (
+                f"{requested}: successful registration is absent from the registry"
+            )
             print(f"  {problem}")
             problems.append(problem)
             continue
         print(f"  {actual} = {obj}")
         export_keys.append(actual)
     if export_keys:
-        _write_exports(w, refs, export_keys, keep_existing=verify, **({"into": args.into} if getattr(args, "into", None) else {}))
+        _write_exports(
+            w,
+            refs,
+            export_keys,
+            keep_existing=verify,
+            **({"into": args.into} if getattr(args, "into", None) else {}),
+        )
     w.save_state(refs.snapshot())
     if problems:
         raise MooError(f"adoption failed: {'; '.join(problems)}")
@@ -366,7 +442,11 @@ def _rewrite_object_refs(obj, old: str, new: str) -> bool:
 
     def rename(value):
         nonlocal changed
-        if isinstance(value, Ref) and value.kind == "@" and value.name.lower() == old.lower():
+        if (
+            isinstance(value, Ref)
+            and value.kind == "@"
+            and value.name.lower() == old.lower()
+        ):
             changed = True
             return Ref("@", new)
         return value
@@ -403,9 +483,7 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
-def _rename_result(
-    w: World, index: int, revision: int, obj: Obj, nonce: str, new: str
-):
+def _rename_result(w: World, index: int, revision: int, obj: Obj, nonce: str, new: str):
     op = ["rename", index, revision, obj, nonce, new]
     results = w.eval(w.helper("tmoo_apply", w.transport.serialize([op])))
     if (
@@ -446,7 +524,10 @@ def _world_write_lock(w: World, *, shared: bool = False, recovery: bool = False)
     lock_path = lock_dir / "write.lock"
     with lock_path.open("a+b") as stream:
         try:
-            fcntl.flock(stream.fileno(), (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+            fcntl.flock(
+                stream.fileno(),
+                (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB,
+            )
         except BlockingIOError:
             raise MooError(
                 f"another file-writing command is already running for world {w.name}"
@@ -454,10 +535,16 @@ def _world_write_lock(w: World, *, shared: bool = False, recovery: bool = False)
         try:
             journal = w.state_path.with_name("state.json.rename-recovery.json")
             if journal.exists() and not recovery:
-                raise MooError(f"unfinished rename journal: {journal}; run tmoo rename-key --recover")
+                raise MooError(
+                    f"unfinished rename journal: {journal}; run tmoo rename-key --recover"
+                )
             if journal_path(w.dir).exists() and not recovery:
                 raise MooError("unfinished local transaction; run tmoo package recover")
-            if not shared and not recovery and (w.dir / ".packages/operation.json").exists():
+            if (
+                not shared
+                and not recovery
+                and (w.dir / ".packages/operation.json").exists()
+            ):
                 raise MooError("unfinished remote operation; run tmoo package recover")
             if not recovery and (w.dir / ".player/operation.json").exists():
                 raise MooError("unfinished player operation; run tmoo player recover")
@@ -469,18 +556,25 @@ def _world_write_lock(w: World, *, shared: bool = False, recovery: bool = False)
 def _write_rename_journal(path: Path, record: dict) -> None:
     temporary = _temp_for(path, "new")
     try:
-        _write_fsynced(temporary, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
+        _write_fsynced(
+            temporary, json.dumps(record, indent=2, ensure_ascii=False) + "\n"
+        )
         temporary.replace(path)
         _fsync_dir(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _matching_registry_key(registry: Registry, key: str, obj: Obj, nonce: str) -> str | None:
+def _matching_registry_key(
+    registry: Registry, key: str, obj: Obj, nonce: str
+) -> str | None:
     return next(
         (
-            actual for actual, value in registry.items()
-            if actual == key and value == obj and registry.generations.get(actual) == (nonce or None)
+            actual
+            for actual, value in registry.items()
+            if actual == key
+            and value == obj
+            and registry.generations.get(actual) == (nonce or None)
         ),
         None,
     )
@@ -490,7 +584,9 @@ class _LocalEditError(MooError):
     pass
 
 
-def _assert_file_snapshot(path: Path, data: bytes, identity: tuple[int, int, int, int]) -> None:
+def _assert_file_snapshot(
+    path: Path, data: bytes, identity: tuple[int, int, int, int]
+) -> None:
     try:
         with path.open("rb") as stream:
             current_identity = os.fstat(stream.fileno())
@@ -552,7 +648,11 @@ def _recovery_temp_paths(w: World, record: dict) -> list[Path]:
                 raise MooError("invalid rename path record")
             for field in ("source", "destination"):
                 raw = change.get(field)
-                if not isinstance(raw, str) or Path(raw).is_absolute() or not raw.endswith(".moo"):
+                if (
+                    not isinstance(raw, str)
+                    or Path(raw).is_absolute()
+                    or not raw.endswith(".moo")
+                ):
                     raise MooError("invalid rename object path")
                 path = safe_path(w.objects_dir, w.objects_dir / raw)
                 validate_key(path.stem)
@@ -563,12 +663,20 @@ def _recovery_temp_paths(w: World, record: dict) -> list[Path]:
             raise MooError("rename recovery journal has an invalid temporary-file path")
         path = Path(raw)
         if path.is_symlink():
-            raise MooError(f"rename recovery journal has an unsafe temporary-file path: {raw}")
+            raise MooError(
+                f"rename recovery journal has an unsafe temporary-file path: {raw}"
+            )
         if (
             path.parent.resolve() not in allowed_parents
-            or re.fullmatch(r"\.(?:[A-Za-z_][A-Za-z0-9_]*\.moo|state\.json)\.(?:new|old|recover)\.[0-9a-f]{32}\.tmp", path.name) is None
+            or re.fullmatch(
+                r"\.(?:[A-Za-z_][A-Za-z0-9_]*\.moo|state\.json)\.(?:new|old|recover)\.[0-9a-f]{32}\.tmp",
+                path.name,
+            )
+            is None
         ):
-            raise MooError(f"rename recovery journal has an unsafe temporary-file path: {raw}")
+            raise MooError(
+                f"rename recovery journal has an unsafe temporary-file path: {raw}"
+            )
         paths.append(path)
     return paths
 
@@ -603,7 +711,9 @@ def _read_rename_journal(w: World, journal: Path) -> tuple[dict, str, str, Obj, 
         new = validate_key(new)
         obj = parse_object_arg(record.get("object"))
     except (AttributeError, MooError, TypeError):
-        raise MooError("rename recovery journal has an invalid new key or object") from None
+        raise MooError(
+            "rename recovery journal has an invalid new key or object"
+        ) from None
     if (
         not isinstance(generation, str)
         or type(index) is not int
@@ -632,11 +742,17 @@ def _recover_local_migration(
     except (OSError, ValueError) as e:
         raise MooError(f"cannot prepare rename recovery: {e}") from None
     object_files = frozenset(snapshots)
-    source_key = source_name if source_name in files else next(
-        (key for key in files if key.lower() == source_name.lower()), None
+    source_key = (
+        source_name
+        if source_name in files
+        else next((key for key in files if key.lower() == source_name.lower()), None)
     )
-    destination_key = destination_name if destination_name in files else next(
-        (key for key in files if key.lower() == destination_name.lower()), None
+    destination_key = (
+        destination_name
+        if destination_name in files
+        else next(
+            (key for key in files if key.lower() == destination_name.lower()), None
+        )
     )
     changes = []
     remove_source = None
@@ -656,8 +772,14 @@ def _recover_local_migration(
                 same_path = source.samefile(destination)
             except OSError:
                 same_path = False
-        if key == source_key and destination_key is not None and destination_key != source_key:
-            existing_path = next(path for path in snapshots if path.stem == destination_key)
+        if (
+            key == source_key
+            and destination_key is not None
+            and destination_key != source_key
+        ):
+            existing_path = next(
+                path for path in snapshots if path.stem == destination_key
+            )
             existing = snapshots[existing_path][0]
             if objdef.parse(existing.decode("utf-8")) != local:
                 raise MooError(
@@ -676,7 +798,9 @@ def _recover_local_migration(
             _write_fsynced(new_temp, rendered)
             temporary.append(new_temp)
             original, identity = snapshots[source]
-            prepared.append((source, destination, same_path, new_temp, original, identity))
+            prepared.append(
+                (source, destination, same_path, new_temp, original, identity)
+            )
         write_state(state_temp, w.player, registry, w.toolbox)
         with state_temp.open("rb") as stream:
             os.fsync(stream.fileno())
@@ -685,7 +809,9 @@ def _recover_local_migration(
             phase="recovery-local-prepared",
             preserved_temporary_files=[
                 str(path)
-                for path in dict.fromkeys([*_recovery_temp_paths(w, record), *temporary])
+                for path in dict.fromkeys(
+                    [*_recovery_temp_paths(w, record), *temporary]
+                )
                 if path.exists()
             ],
             recovery_commands=["tmoo rename-key --recover"],
@@ -715,7 +841,9 @@ def _recover_local_migration(
             recovery_error=str(e),
             preserved_temporary_files=[
                 str(path)
-                for path in dict.fromkeys([*_recovery_temp_paths(w, record), *temporary])
+                for path in dict.fromkeys(
+                    [*_recovery_temp_paths(w, record), *temporary]
+                )
                 if path.exists()
             ],
             recovery_commands=["tmoo rename-key --recover"],
@@ -772,13 +900,22 @@ def cmd_rename_key(args):
             raise MooError("unfinished player operation; run tmoo player recover")
         journal = w.state_path.with_name("state.json.rename-recovery.json")
         if getattr(args, "recover", False):
-            if getattr(args, "old", None) is not None or getattr(args, "new", None) is not None:
+            if (
+                getattr(args, "old", None) is not None
+                or getattr(args, "new", None) is not None
+            ):
                 raise MooError("rename-key --recover does not take OLD or NEW")
-            from .ownership import operation_path, recover as recover_operation
+            from .ownership import operation_path
+            from .ownership import recover as recover_operation
+
             if isinstance(w, World) and operation_path(w).exists():
-                from .storage import read_json, recover as recover_files
+                from .storage import read_json
+                from .storage import recover as recover_files
+
                 if read_json(operation_path(w)).get("kind") != "migration":
-                    raise MooError("use package recover for the pending package operation")
+                    raise MooError(
+                        "use package recover for the pending package operation"
+                    )
                 if journal_path(w.dir).exists():
                     recover_files(w.dir)
                 print(recover_operation(w))
@@ -787,14 +924,27 @@ def cmd_rename_key(args):
         else:
             if getattr(args, "old", None) is None or getattr(args, "new", None) is None:
                 raise MooError("rename-key needs OLD and NEW (or use --recover)")
-            if (_structured_world(w, args) or isinstance(w, World) and (w.dir / "player.moo").exists()) and objdef.is_identifier(args.old) and args.old.lower() != "me":
+            if (
+                (
+                    _structured_world(w, args)
+                    or isinstance(w, World)
+                    and (w.dir / "player.moo").exists()
+                )
+                and objdef.is_identifier(args.old)
+                and args.old.lower() != "me"
+            ):
                 from .installation import Store
-                from .migrations import prepare, execute
+                from .migrations import execute, prepare
+
                 if journal.exists() or journal_path(w.dir).exists():
-                    raise MooError("recover the unfinished file transaction before renaming")
+                    raise MooError(
+                        "recover the unfinished file transaction before renaming"
+                    )
                 store = Store(w)
                 proposal = prepare(store, {args.old: args.new})
-                print(f"rename {args.old} to {args.new}; {len(proposal['changes'])} affected files")
+                print(
+                    f"rename {args.old} to {args.new}; {len(proposal['changes'])} affected files"
+                )
                 print(execute(store, proposal))
             else:
                 _rename_key_locked(w, args, journal)
@@ -852,15 +1002,23 @@ def _rename_key_locked(w: World, args, journal: Path) -> None:
                     )
             original, identity = snapshots[source]
             changes.append(
-                (source, destination, same_path, objdef.render(local), original, identity)
+                (
+                    source,
+                    destination,
+                    same_path,
+                    objdef.render(local),
+                    original,
+                    identity,
+                )
             )
     except (OSError, ValueError) as e:
         raise MooError(f"cannot prepare rename {old!r} to {new!r}: {e}") from None
 
-    updated_pairs = [(new if key == old else key, value) for key, value in refs.registry.items()]
+    updated_pairs = [
+        (new if key == old else key, value) for key, value in refs.registry.items()
+    ]
     updated_generations = {
-        new if key == old else key: refs.generations.get(key)
-        for key in refs.registry
+        new if key == old else key: refs.generations.get(key) for key in refs.registry
     }
     expected_registry = Registry(
         updated_pairs, updated_generations, refs.registry_revision + 1
@@ -895,7 +1053,13 @@ def _rename_key_locked(w: World, args, journal: Path) -> None:
     recovery_commands = ["tmoo rename-key --recover"]
     record = {
         "schema_version": 2,
-        "paths": [{"source": str(source.relative_to(w.objects_dir)), "destination": str(destination.relative_to(w.objects_dir))} for source, destination, *_ in changes],
+        "paths": [
+            {
+                "source": str(source.relative_to(w.objects_dir)),
+                "destination": str(destination.relative_to(w.objects_dir)),
+            }
+            for source, destination, *_ in changes
+        ],
         "phase": "intent",
         "old_key": old,
         "new_key": new,
@@ -932,7 +1096,9 @@ def _rename_key_locked(w: World, args, journal: Path) -> None:
     if actual is None:
         if still_old is not None:
             _cleanup(temporary + [journal])
-            raise MooError(f"rename failed without changing the registry: {remote_error}") from None
+            raise MooError(
+                f"rename failed without changing the registry: {remote_error}"
+            ) from None
         record.update(
             phase="remote-outcome-conflicted",
             remote_error=str(remote_error) if remote_error is not None else None,
@@ -950,7 +1116,9 @@ def _rename_key_locked(w: World, args, journal: Path) -> None:
         for source, destination, same_path, new_temp, _, original, identity in prepared:
             _assert_file_snapshot(source, original, identity)
             if not same_path and destination.exists():
-                raise _LocalEditError(f"{destination.name} appeared after the rename was prepared")
+                raise _LocalEditError(
+                    f"{destination.name} appeared after the rename was prepared"
+                )
             new_temp.replace(destination)
             if not same_path:
                 source.unlink()
@@ -1017,15 +1185,19 @@ def _rename_key_locked(w: World, args, journal: Path) -> None:
         ) from None
 
     commands = ["tmoo rename-key --recover"]
-    record.update({
-        "phase": "recovery-incomplete",
-        "local_error": str(finalization_error),
-        "reverse_error": str(reverse_error) if reverse_error is not None else None,
-        "rollback_errors": rollback_errors,
-        "finalized_files": [str(destination) for _, destination, _ in finalized],
-        "preserved_temporary_files": [str(path) for path in temporary if path.exists()],
-        "recovery_commands": commands,
-    })
+    record.update(
+        {
+            "phase": "recovery-incomplete",
+            "local_error": str(finalization_error),
+            "reverse_error": str(reverse_error) if reverse_error is not None else None,
+            "rollback_errors": rollback_errors,
+            "finalized_files": [str(destination) for _, destination, _ in finalized],
+            "preserved_temporary_files": [
+                str(path) for path in temporary if path.exists()
+            ],
+            "recovery_commands": commands,
+        }
+    )
     try:
         _write_rename_journal(journal, record)
     except OSError as e:
@@ -1057,19 +1229,29 @@ def _plan(w: World):
     live = export_mod.export(
         w,
         refs,
-        [registry_key for key in files if (registry_key := refs.registry_key(key)) is not None],
+        [
+            registry_key
+            for key in files
+            if (registry_key := refs.registry_key(key)) is not None
+        ],
     )
     return refs, files, plan_mod.build(files, live, refs)
 
 
 def _print_plan(p: plan_mod.Plan, destroy: bool):
     for key, parent, name in p.creates:
-        why = f"  [{p.gone[key]} is gone from the MOO; recreating from the file]" if key in p.gone else ""
+        why = (
+            f"  [{p.gone[key]} is gone from the MOO; recreating from the file]"
+            if key in p.gone
+            else ""
+        )
         print(f"  + create {key} ({name}) as child of {parent}{why}")
     for op in p.ops:
         print(f"  ~ {plan_mod.describe(op)}")
     for key in p.destroys:
-        print(f"  - {'recycle' if destroy else 'orphan (no file; --destroy recycles)'} {key}")
+        print(
+            f"  - {'recycle' if destroy else 'orphan (no file; --destroy recycles)'} {key}"
+        )
     for warning in p.warnings:
         print(f"  ? {warning}")
     for prob in p.problems:
@@ -1083,7 +1265,9 @@ def cmd_plan(args):
     with _world_write_lock(w, shared=True):
         if _structured_world(w, args):
             prepared = deployment.prepare(w, args)
-            print(f"selected modules: {', '.join(sorted(prepared.selected)) or '(none)'}")
+            print(
+                f"selected modules: {', '.join(sorted(prepared.selected)) or '(none)'}"
+            )
             p = prepared.plan
         else:
             _, _, p = _plan(w)
@@ -1117,7 +1301,9 @@ def _apply_locked(w: World, args) -> None:
             return
         outcome = prepared.run(destroy=args.destroy)
         if outcome.failed:
-            raise MooError("; ".join(f"{label}: {why}" for label, why in outcome.failed))
+            raise MooError(
+                "; ".join(f"{label}: {why}" for label, why in outcome.failed)
+            )
         print(f"applied {len(outcome.done)} op(s)")
         return
     refs, files, p = _plan(w)
@@ -1153,14 +1339,24 @@ def _diff_locked(w: World, args):
     refs = w.refs()
     files = w.load_files()
     if deployment.has_selectors(args):
-        _, selected = deployment.selected_keys(w, args, files, with_deps=getattr(args, "with_deps", False))
+        _, selected = deployment.selected_keys(
+            w, args, files, with_deps=getattr(args, "with_deps", False)
+        )
         keys = [key for key in files if key.lower() in selected]
     elif args.keys:
         keys = args.keys
     else:
         keys = list(files)
-        keys.extend(key for key in refs.registry if key.lower() not in {name.lower() for name in files})
-    live_keys = [registry_key for key in keys if (registry_key := refs.registry_key(key)) is not None]
+        keys.extend(
+            key
+            for key in refs.registry
+            if key.lower() not in {name.lower() for name in files}
+        )
+    live_keys = [
+        registry_key
+        for key in keys
+        if (registry_key := refs.registry_key(key)) is not None
+    ]
     live = export_mod.export(w, refs, live_keys)
     files_by_name = {key.lower(): key for key in files}
     live_by_name = {key.lower(): key for key in live}
@@ -1177,14 +1373,23 @@ def _diff_locked(w: World, args):
         if a == b:
             continue
         changed += 1
-        sys.stdout.writelines(difflib.unified_diff(a, b, fromfile=f"moo/{key}.moo", tofile=f"files/{key}.moo"))
+        sys.stdout.writelines(
+            difflib.unified_diff(
+                a, b, fromfile=f"moo/{key}.moo", tofile=f"files/{key}.moo"
+            )
+        )
     if not changed:
         print("no differences")
 
 
 def _structured_world(w, args) -> bool:
-    return deployment.has_selectors(args) or (isinstance(w, World) and (
-        bool(discover(w.objects_dir).manifests) or (w.dir / "packages.lock.json").exists()))
+    return deployment.has_selectors(args) or (
+        isinstance(w, World)
+        and (
+            bool(discover(w.objects_dir).manifests)
+            or (w.dir / "packages.lock.json").exists()
+        )
+    )
 
 
 def cmd_check(args):
@@ -1195,6 +1400,7 @@ def cmd_check(args):
         graph = deployment.module_graph(w, files)
         if isinstance(w, World):
             from .player import check
+
             check(w)
         print(f"checked {len(files)} objects, {len(graph.modules)} modules")
 
@@ -1204,7 +1410,9 @@ def cmd_modules(args):
     with _world_write_lock(w, shared=True):
         graph = deployment.module_graph(w, w.load_files())
         for name, module in sorted(graph.modules.items()):
-            print(f"{name}: {len(module.keys)} objects ({module.path.relative_to(w.dir)})")
+            print(
+                f"{name}: {len(module.keys)} objects ({module.path.relative_to(w.dir)})"
+            )
             if module.references:
                 print(f"  references: {', '.join(sorted(module.references))}")
             if module.depends_on:
@@ -1212,10 +1420,21 @@ def cmd_modules(args):
 
 
 def _selectors(parser, *, readonly=False):
-    parser.add_argument("--module", action="append", default=[], help="select a module (repeat for a union)")
-    parser.add_argument("--package", action="append", default=[], help="select a named package instance")
+    parser.add_argument(
+        "--module",
+        action="append",
+        default=[],
+        help="select a module (repeat for a union)",
+    )
+    parser.add_argument(
+        "--package", action="append", default=[], help="select a named package instance"
+    )
     if readonly:
-        parser.add_argument("--with-deps", action="store_true", help="include reference and ordering dependencies")
+        parser.add_argument(
+            "--with-deps",
+            action="store_true",
+            help="include reference and ordering dependencies",
+        )
 
 
 def cmd_package(args):
@@ -1225,12 +1444,16 @@ def cmd_package(args):
 
     if args.action == "check":
         package = Package.load(Path(args.source))
-        print(f"checked {package.name} {package.version}: {len(package.manifests)} modules, {len(package.objects)} objects ({package.digest})")
+        print(
+            f"checked {package.name} {package.version}: {len(package.manifests)} modules, {len(package.objects)} objects ({package.digest})"
+        )
         return
     w = _world(args)
     with _world_write_lock(w, recovery=args.action == "recover"):
         if args.action == "recover":
-            from .ownership import operation_path, recover as recover_remote
+            from .ownership import operation_path
+            from .ownership import recover as recover_remote
+
             if journal_path(w.dir).exists():
                 recover(w.dir)
                 print("recovered local package transaction")
@@ -1248,70 +1471,121 @@ def cmd_package(args):
                     raise MooError("--bind requires distinct NAME=VALUE pairs")
                 bindings[key.lower()] = value
             if args.action == "import":
-                from .imports import prepare, execute
-                proposed, mapping = prepare(store, args.source, args.instance, args.mapping,
-                                            namespace=args.namespace, bindings=bindings)
-                print(f"claim existing keys for {proposed[0]}: {', '.join(mapping.values())}")
+                from .imports import execute, prepare
+
+                proposed, mapping = prepare(
+                    store,
+                    args.source,
+                    args.instance,
+                    args.mapping,
+                    namespace=args.namespace,
+                    bindings=bindings,
+                )
+                print(
+                    f"claim existing keys for {proposed[0]}: {', '.join(mapping.values())}"
+                )
                 for path, value in proposed[1].items():
-                    print(f"  {'remove' if value is None else 'write'} {path.relative_to(w.dir)}")
-                if not args.yes and input("import? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print(
+                        f"  {'remove' if value is None else 'write'} {path.relative_to(w.dir)}"
+                    )
+                if not args.yes and input("import? [y/N] ").strip().lower() not in (
+                    "y",
+                    "yes",
+                ):
                     print("aborted")
                     return
                 print(execute(store, proposed, mapping))
             else:
-                name = store.install(args.instance, args.source, namespace=args.namespace, bindings=bindings)
+                name = store.install(
+                    args.instance,
+                    args.source,
+                    namespace=args.namespace,
+                    bindings=bindings,
+                )
                 print(f"prepared instance {name}; review tmoo plan --package {name}")
         elif args.action == "update":
             from .updates import update
-            print(update(store, args.instances, resume=args.resume, abort=args.abort, allow_replacements=args.allow_replacements))
+
+            print(
+                update(
+                    store,
+                    args.instances,
+                    resume=args.resume,
+                    abort=args.abort,
+                    allow_replacements=args.allow_replacements,
+                )
+            )
         elif args.action == "remove":
             from .updates import remove
+
             remove(store, args.instances, allow_modified=args.yes)
-            print(f"prepared removal: {', '.join(args.instances)}; review plan --destroy before applying")
+            print(
+                f"prepared removal: {', '.join(args.instances)}; review plan --destroy before applying"
+            )
         elif args.action == "migrate":
             name = store.name(args.instance)
             if args.source_keys:
                 from .updates import migrate_source_keys
+
                 print(migrate_source_keys(store, name, Path(args.source_keys)))
             else:
-                from .migrations import prepare, execute
-                mapping = {r["key"]: f"{args.namespace}__{k}" for k, r in store.instances[name]["objects"].items()}
+                from .migrations import execute, prepare
+
+                mapping = {
+                    r["key"]: f"{args.namespace}__{k}"
+                    for k, r in store.instances[name]["objects"].items()
+                }
                 proposal = prepare(store, mapping, namespace=(name, args.namespace))
                 for old, new in proposal["mapping"].items():
                     print(f"  {old} -> {new}")
-                if not args.yes and input("migrate namespace? [y/N] ").strip().lower() not in ("y", "yes"):
+                if not args.yes and input(
+                    "migrate namespace? [y/N] "
+                ).strip().lower() not in ("y", "yes"):
                     print("aborted")
                     return
                 print(execute(store, proposal))
         elif args.action == "rename":
             from .migrations import rename_instance
+
             print(rename_instance(store, args.instance, args.new))
 
 
 def cmd_player(args):
-    from . import player as player_mod, playerdef
+    from . import player as player_mod
+    from . import playerdef
+
     w = _world(args)
     readonly = args.action in {"inspect", "status", "check", "plan", "diff"}
-    with _world_write_lock(w, shared=readonly, recovery=args.action in {"recover", "inspect", "status"}):
+    with _world_write_lock(
+        w, shared=readonly, recovery=args.action in {"recover", "inspect", "status"}
+    ):
         if args.action == "check":
             profile = player_mod.check(w)
             print(f"checked {len(profile.entries())} selected player fields")
         elif args.action in {"inspect", "status"}:
             row = player_mod.call(w, "tmoo_player_read", "inspect")
-            print(f"player {row[0]}, owner {row[1]}, parent {row[4]}, programmer={row[2]}, wizard={row[3]}")
+            print(
+                f"player {row[0]}, owner {row[1]}, parent {row[4]}, programmer={row[2]}, wizard={row[3]}"
+            )
             for name, info in row[5]:
                 print(f"  property {name}: owner {info[0]}, flags {info[1]!r}")
             for index, info, vargs in row[6]:
-                print(f"  verb {info[2]!r}: owner {info[0]}, flags {info[1]!r}, args {' '.join(vargs)}")
+                print(
+                    f"  verb {info[2]!r}: owner {info[0]}, flags {info[1]!r}, args {' '.join(vargs)}"
+                )
             print(f"selected fields: {len(player_mod.load(w).entries())}")
             state = player_mod.remote(w)
             print(f"player revision {state[2]} ({state[5]})")
             if state[5] == "running" and state[6]:
-                print(f"callback task {state[6][0]}; wait for it to finish before recovery")
+                print(
+                    f"callback task {state[6][0]}; wait for it to finish before recovery"
+                )
             if state[3] or player_mod.paths(w)[2].exists():
                 print("unfinished player operation; run player recover in its checkout")
         elif args.action in {"track", "pull"}:
-            count = player_mod.track(w, player_mod.selectors(args), pull=args.action == "pull")
+            count = player_mod.track(
+                w, player_mod.selectors(args), pull=args.action == "pull"
+            )
             print(f"accepted {count} live field(s) into player.moo")
         elif args.action == "untrack":
             player_mod.untrack(w, player_mod.selectors(args))
@@ -1321,6 +1595,7 @@ def cmd_player(args):
             print("prepared player changes; review player plan before player apply")
         elif args.action == "recover":
             from .storage import recover
+
             if not player_mod.paths(w)[2].exists():
                 raise MooError("no player operation to recover")
             if journal_path(w.dir).exists():
@@ -1332,9 +1607,17 @@ def cmd_player(args):
                 live = playerdef.PlayerDef()
                 refs = w.refs()
                 for item in prepared.fields:
-                    player_mod.accept(live, item["kind"], item["name"], item["before"], refs)
-                diff = list(difflib.unified_diff(playerdef.render(live).splitlines(True),
-                    playerdef.render(prepared.profile).splitlines(True), fromfile="moo/player.moo", tofile="files/player.moo"))
+                    player_mod.accept(
+                        live, item["kind"], item["name"], item["before"], refs
+                    )
+                diff = list(
+                    difflib.unified_diff(
+                        playerdef.render(live).splitlines(True),
+                        playerdef.render(prepared.profile).splitlines(True),
+                        fromfile="moo/player.moo",
+                        tofile="files/player.moo",
+                    )
+                )
                 sys.stdout.writelines(diff or ["no player differences\n"])
             else:
                 print(player_mod.describe(prepared))
@@ -1343,15 +1626,23 @@ def cmd_player(args):
             if args.action == "apply":
                 if not prepared.changes and not prepared.needs_receipt:
                     return
-                if not args.yes and input("apply player changes? [y/N] ").strip().lower() not in ("y", "yes"):
+                if not args.yes and input(
+                    "apply player changes? [y/N] "
+                ).strip().lower() not in ("y", "yes"):
                     print("aborted")
                     return
                 print(f"applied {player_mod.apply(prepared)} player change(s)")
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="tmoo", description="a MOO player's objects as files, on any MOO")
-    ap.add_argument("--world", "-w", help="world name under worlds/ (default: the only one, or $TMOO_WORLD)")
+    ap = argparse.ArgumentParser(
+        prog="tmoo", description="a MOO player's objects as files, on any MOO"
+    )
+    ap.add_argument(
+        "--world",
+        "-w",
+        help="world name under worlds/ (default: the only one, or $TMOO_WORLD)",
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     i = sub.add_parser("init", help="start a world: worlds/<name>/world.toml")
@@ -1369,15 +1660,39 @@ def main(argv=None):
     t.add_argument("world_name")
     t.set_defaults(fn=cmd_secret)
 
-    sub.add_parser("bootstrap", help="create the toolbox and install the helper verbs").set_defaults(fn=cmd_bootstrap)
-    status = sub.add_parser("status", help="registry, files and unmanaged owned objects")
+    sub.add_parser(
+        "bootstrap", help="create the toolbox and install the helper verbs"
+    ).set_defaults(fn=cmd_bootstrap)
+    status = sub.add_parser(
+        "status", help="registry, files and unmanaged owned objects"
+    )
     status.set_defaults(fn=cmd_status)
     _selectors(status, readonly=True)
-    sub.add_parser("check", help="validate world files and modules offline").set_defaults(fn=cmd_check)
-    sub.add_parser("modules", help="list modules and dependencies offline").set_defaults(fn=cmd_modules)
-    plr = sub.add_parser("player", help="manage selected properties, settings, verbs and features on @me")
+    sub.add_parser(
+        "check", help="validate world files and modules offline"
+    ).set_defaults(fn=cmd_check)
+    sub.add_parser(
+        "modules", help="list modules and dependencies offline"
+    ).set_defaults(fn=cmd_modules)
+    plr = sub.add_parser(
+        "player", help="manage selected properties, settings, verbs and features on @me"
+    )
     player_actions = plr.add_subparsers(dest="action", required=True)
-    for action in ("inspect", "status", "check", "plan", "diff", "apply", "track", "pull", "untrack", "remove", "clear", "detach", "recover"):
+    for action in (
+        "inspect",
+        "status",
+        "check",
+        "plan",
+        "diff",
+        "apply",
+        "track",
+        "pull",
+        "untrack",
+        "remove",
+        "clear",
+        "detach",
+        "recover",
+    ):
         parser = player_actions.add_parser(action)
         parser.set_defaults(fn=cmd_player)
         if action in ("track", "pull", "untrack", "remove", "clear", "detach"):
@@ -1386,7 +1701,11 @@ def main(argv=None):
         if action == "apply":
             parser.add_argument("--yes", "-y", action="store_true")
         if action == "recover":
-            parser.add_argument("--accept-live", action="store_true", help="accept inspected live state after an uncertain callback; never replay it")
+            parser.add_argument(
+                "--accept-live",
+                action="store_true",
+                help="accept inspected live state after an uncertain callback; never replay it",
+            )
     pkg = sub.add_parser("package", help="validate and manage package instances")
     actions = pkg.add_subparsers(dest="action", required=True)
     pc = actions.add_parser("check", help="validate source without a world")
@@ -1398,41 +1717,67 @@ def main(argv=None):
     pi.add_argument("--namespace")
     pi.add_argument("--bind", action="append", default=[])
     pi.set_defaults(fn=cmd_package)
-    pim = actions.add_parser("import", help="claim existing managed keys without recreating them")
+    pim = actions.add_parser(
+        "import", help="claim existing managed keys without recreating them"
+    )
     pim.add_argument("source")
     pim.add_argument("--as", dest="instance", required=True)
-    pim.add_argument("--mapping", required=True, help="TOML source-key to existing-key mapping")
+    pim.add_argument(
+        "--mapping", required=True, help="TOML source-key to existing-key mapping"
+    )
     pim.add_argument("--namespace")
     pim.add_argument("--bind", action="append", default=[])
     pim.add_argument("--yes", "-y", action="store_true")
     pim.set_defaults(fn=cmd_package)
     pu = actions.add_parser("update", help="stage updates, preserving local edits")
     pu.add_argument("instances", nargs="+")
-    pu.add_argument("--allow-replacements", action="store_true", help="accept distinct source-key additions and removals instead of an identity migration")
+    pu.add_argument(
+        "--allow-replacements",
+        action="store_true",
+        help="accept distinct source-key additions and removals instead of an identity migration",
+    )
     resolve = pu.add_mutually_exclusive_group()
     resolve.add_argument("--resume", action="store_true")
     resolve.add_argument("--abort", action="store_true")
     pu.set_defaults(fn=cmd_package)
     pr = actions.add_parser("remove", help="stage instance removal without recycling")
     pr.add_argument("instances", nargs="+")
-    pr.add_argument("--yes", "-y", action="store_true", help="archive locally edited files before removal")
+    pr.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="archive locally edited files before removal",
+    )
     pr.set_defaults(fn=cmd_package)
-    pm = actions.add_parser("migrate", help="preserve identities across namespace or source-key changes")
+    pm = actions.add_parser(
+        "migrate", help="preserve identities across namespace or source-key changes"
+    )
     pm.add_argument("instance")
     migration = pm.add_mutually_exclusive_group(required=True)
     migration.add_argument("--namespace")
-    migration.add_argument("--source-keys", help="TOML [objects] mapping old source keys to new source keys")
+    migration.add_argument(
+        "--source-keys",
+        help="TOML [objects] mapping old source keys to new source keys",
+    )
     pm.add_argument("--yes", "-y", action="store_true")
     pm.set_defaults(fn=cmd_package)
-    pn = actions.add_parser("rename", help="rename an instance while preserving its namespace and keys")
+    pn = actions.add_parser(
+        "rename", help="rename an instance while preserving its namespace and keys"
+    )
     pn.add_argument("instance")
     pn.add_argument("new")
     pn.set_defaults(fn=cmd_package)
-    actions.add_parser("recover", help="recover an interrupted package operation").set_defaults(fn=cmd_package)
+    actions.add_parser(
+        "recover", help="recover an interrupted package operation"
+    ).set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("pull", help="write files from the live objects (all, or the given keys)")
+    p = sub.add_parser(
+        "pull", help="write files from the live objects (all, or the given keys)"
+    )
     p.add_argument("keys", nargs="*")
-    p.add_argument("--into", help="destination for missing standalone files, relative to objects/")
+    p.add_argument(
+        "--into", help="destination for missing standalone files, relative to objects/"
+    )
     p.set_defaults(fn=cmd_pull)
     _selectors(p, readonly=True)
     ex = sub.add_parser("export", help="alias of pull")
@@ -1443,12 +1788,22 @@ def main(argv=None):
     a.add_argument("object", nargs="?", help="#123")
     a.add_argument("key", nargs="?", help="registry name")
     a.add_argument("--into", help="destination relative to objects/")
-    a.add_argument("--owned", action="store_true", help="adopt every owned object not yet managed")
-    a.add_argument("--verify", action="store_true", help="stamp an existing key/object binding after confirming its identity")
+    a.add_argument(
+        "--owned", action="store_true", help="adopt every owned object not yet managed"
+    )
+    a.add_argument(
+        "--verify",
+        action="store_true",
+        help="stamp an existing key/object binding after confirming its identity",
+    )
     a.set_defaults(fn=cmd_adopt)
 
-    rk = sub.add_parser("rename-key", help="rename a registry key and its local object file")
-    rk.add_argument("old", nargs="?", help="existing registry key, including a legacy key")
+    rk = sub.add_parser(
+        "rename-key", help="rename a registry key and its local object file"
+    )
+    rk.add_argument(
+        "old", nargs="?", help="existing registry key, including a legacy key"
+    )
     rk.add_argument("new", nargs="?", help="new ASCII identifier")
     rk.add_argument(
         "--recover",
@@ -1461,12 +1816,16 @@ def main(argv=None):
     rk.set_defaults(fn=cmd_rename_key)
 
     pl = sub.add_parser("plan", help="show what apply would do")
-    pl.add_argument("--destroy", action="store_true", help="include recycling objects with no file")
+    pl.add_argument(
+        "--destroy", action="store_true", help="include recycling objects with no file"
+    )
     pl.set_defaults(fn=cmd_plan)
     _selectors(pl)
 
     ac = sub.add_parser("apply", help="make the MOO match the files")
-    ac.add_argument("--destroy", action="store_true", help="recycle registry objects with no file")
+    ac.add_argument(
+        "--destroy", action="store_true", help="recycle registry objects with no file"
+    )
     ac.add_argument("--yes", "-y", action="store_true", help="do not ask")
     ac.set_defaults(fn=cmd_apply)
     _selectors(ac)

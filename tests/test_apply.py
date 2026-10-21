@@ -35,7 +35,9 @@ class FakeWorld:
 
     def eval(self, call):
         verb, text = call
-        value = moolit.parse(text, dialect=getattr(self.transport, "literal_dialect", moolit.LAMBDA))
+        value = moolit.parse(
+            text, dialect=getattr(self.transport, "literal_dialect", moolit.LAMBDA)
+        )
 
         def no_refs(v):
             if isinstance(v, Ref):  # the MOO has no @key syntax
@@ -44,7 +46,10 @@ class FakeWorld:
 
         moolit.walk(value, no_refs)
         if verb == "tmoo_export":
-            return [[binding[1], *self.names[binding[1]], Obj(-1), ME, "", [], []] for binding in value]
+            return [
+                [binding[1], *self.names[binding[1]], Obj(-1), ME, "", [], []]
+                for binding in value
+            ]
         self.batches.append(value)
         return [self._op(op) for op in value]
 
@@ -73,9 +78,15 @@ class FakeWorld:
 
 
 FILES = {
-    "hall": ObjectDef(key="hall", name="Hall", parent=Ref("$", "room"),
-                      props=[PropDef("guard", Ref("@", "guard"))]),
-    "guard": ObjectDef(key="guard", name="Guard", parent=Ref("$", "thing"), location=Ref("@", "hall")),
+    "hall": ObjectDef(
+        key="hall",
+        name="Hall",
+        parent=Ref("$", "room"),
+        props=[PropDef("guard", Ref("@", "guard"))],
+    ),
+    "guard": ObjectDef(
+        key="guard", name="Guard", parent=Ref("$", "thing"), location=Ref("@", "hall")
+    ),
 }
 
 
@@ -90,11 +101,22 @@ def test_creates_then_applies_with_new_numbers():
     outcome = run(w)
     assert not outcome.failed
     hall, guard = w.registry["hall"], w.registry["guard"]
-    assert ["addprop", "hall", hall, w.generations["hall"], "guard", guard, [ME, "rc"]] in w.sent
+    assert [
+        "addprop",
+        "hall",
+        hall,
+        w.generations["hall"],
+        "guard",
+        guard,
+        [ME, "rc"],
+    ] in w.sent
     assert ["move", "guard", guard, w.generations["guard"], hall] in w.sent
     assert w.sent[-1] == [
         "link",
-        [["hall", hall, w.generations["hall"]], ["guard", guard, w.generations["guard"]]],
+        [
+            ["hall", hall, w.generations["hall"]],
+            ["guard", guard, w.generations["guard"]],
+        ],
     ]
     assert w.saved == w.registry
 
@@ -103,7 +125,11 @@ def test_a_failed_create_skips_only_the_ops_that_need_it():
     w = FakeWorld(fail={"guard"})
     outcome = run(w)
     failed = {label for label, _ in outcome.failed}
-    assert failed == {"create guard (Guard)", "addprop @hall.guard", "move @guard @hall"}
+    assert failed == {
+        "create guard (Guard)",
+        "addprop @hall.guard",
+        "move @guard @hall",
+    }
     assert w.sent[-1] == ["link", [["hall", w.registry["hall"], w.generations["hall"]]]]
     assert w.saved == {"hall": w.registry["hall"]}
 
@@ -141,7 +167,10 @@ def test_mutation_is_rejected_when_the_key_was_rebound_after_planning():
             self.sent.append(op)
             if len(op) >= 4 and op[0] == "name" and isinstance(op[1], str):
                 _, key, expected, nonce, *_ = op
-                if self.registry.get(key) != expected or self.generations.get(key) != nonce:
+                if (
+                    self.registry.get(key) != expected
+                    or self.generations.get(key) != nonce
+                ):
                     return [0, "E_INVARG", f"key {key} was rebound"]
                 mutated.append(expected)
                 return [1, 1]
@@ -181,19 +210,27 @@ def test_exit_reconciliation_failures_from_the_fake_helper_are_reported():
             return [1, 1]
 
     w = FailingExitWorld()
-    refs = verify_bindings(w, {"hall": hall, "old_source": old_source, "new_source": new_source})
+    refs = verify_bindings(
+        w, {"hall": hall, "old_source": old_source, "new_source": new_source}
+    )
     want = ObjectDef(
-        key="hall", name="Hall", parent=Obj(3),
+        key="hall",
+        name="Hall",
+        parent=Obj(3),
         props=[PropDef("source", Ref("@", "new_source"), defined=False)],
     )
     have = ObjectDef(
-        key="hall", name="Hall", parent=Obj(3),
+        key="hall",
+        name="Hall",
+        parent=Obj(3),
         props=[PropDef("source", Ref("@", "old_source"), defined=False)],
     )
     ops = plan.diff_object("hall", want, have, refs)
     ops.append(("link", [Ref("@", "hall")]))
 
-    outcome = apply.run(w, plan.Plan(ops=ops), refs, files={"hall": want}, log=lambda _: None)
+    outcome = apply.run(
+        w, plan.Plan(ops=ops), refs, files={"hall": want}, log=lambda _: None
+    )
 
     assert [op[0] for op in w.sent] == ["endpoint", "link"]
     assert outcome.failed == [
@@ -205,13 +242,19 @@ def test_exit_reconciliation_failures_from_the_fake_helper_are_reported():
 def test_successful_exit_unlink_allows_the_endpoint_mutation():
     hall, old_dest, new_dest = Obj(10), Obj(11), Obj(12)
     w = FakeWorld()
-    refs = verify_bindings(w, {"hall": hall, "old_dest": old_dest, "new_dest": new_dest})
+    refs = verify_bindings(
+        w, {"hall": hall, "old_dest": old_dest, "new_dest": new_dest}
+    )
     want = ObjectDef(
-        key="hall", name="Hall", parent=Obj(3),
+        key="hall",
+        name="Hall",
+        parent=Obj(3),
         props=[PropDef("dest", Ref("@", "new_dest"), defined=False)],
     )
     have = ObjectDef(
-        key="hall", name="Hall", parent=Obj(3),
+        key="hall",
+        name="Hall",
+        parent=Obj(3),
         props=[PropDef("dest", Ref("@", "old_dest"), defined=False)],
     )
 
@@ -252,14 +295,23 @@ def test_endpoint_race_fails_without_changing_or_relinking_the_newer_room():
     w = RacingEndpointWorld()
     refs = verify_bindings(
         w,
-        {"door": exit_obj, "planned_old": planned_old, "raced_old": raced_old, "desired": desired},
+        {
+            "door": exit_obj,
+            "planned_old": planned_old,
+            "raced_old": raced_old,
+            "desired": desired,
+        },
     )
     want = ObjectDef(
-        key="door", name="Door", parent=Obj(3),
+        key="door",
+        name="Door",
+        parent=Obj(3),
         props=[PropDef("source", Ref("@", "desired"), defined=False)],
     )
     have = ObjectDef(
-        key="door", name="Door", parent=Obj(3),
+        key="door",
+        name="Door",
+        parent=Obj(3),
         props=[PropDef("source", Ref("@", "planned_old"), defined=False)],
     )
 
@@ -273,7 +325,10 @@ def test_endpoint_race_fails_without_changing_or_relinking_the_newer_room():
 
     assert [op[0] for op in w.sent] == ["endpoint"]
     assert outcome.failed == [
-        ("endpoint @door.source #11 -> #13", "E_INVARG: source changed before endpoint update; replan"),
+        (
+            "endpoint @door.source #11 -> #13",
+            "E_INVARG: source changed before endpoint update; replan",
+        ),
     ]
     assert w.endpoints[exit_obj] == raced_old
     assert w.members == {planned_old: set(), raced_old: {exit_obj}, desired: set()}
@@ -305,15 +360,21 @@ def test_exit_reparented_to_non_exit_drops_its_old_room_membership():
             return [1, 1]
 
     w = ReparentingWorld()
-    refs = verify_bindings(w, {"door": door, "old_source": old_source, "new_source": new_source})
+    refs = verify_bindings(
+        w, {"door": door, "old_source": old_source, "new_source": new_source}
+    )
     refs.sysrefs = {"exit": Obj(7), "thing": Obj(5)}
     refs.reindex()
     want = ObjectDef(
-        key="door", name="Door", parent=Ref("$", "thing"),
+        key="door",
+        name="Door",
+        parent=Ref("$", "thing"),
         props=[PropDef("source", Ref("@", "new_source"), defined=False)],
     )
     have = ObjectDef(
-        key="door", name="Door", parent=Ref("$", "exit"),
+        key="door",
+        name="Door",
+        parent=Ref("$", "exit"),
         props=[PropDef("source", Ref("@", "old_source"), defined=False)],
     )
     old_room = ObjectDef(key="old_source", name="Old", parent=Ref("$", "thing"))
@@ -342,7 +403,9 @@ def test_orphans_are_only_recycled_when_destroy_is_explicit():
 
     destroyed = FakeWorld()
     destroyed_refs = verify_bindings(destroyed, {"old": old})
-    outcome = apply.run(destroyed, p, destroyed_refs, files={}, destroy=True, log=lambda _: None)
+    outcome = apply.run(
+        destroyed, p, destroyed_refs, files={}, destroy=True, log=lambda _: None
+    )
     assert outcome.failed == []
     assert destroyed.sent == [["destroy", "old", old, "generation-old"]]
     assert destroyed_refs.registry == {}
@@ -358,7 +421,9 @@ def test_destroy_phase_is_skipped_after_a_create_failure():
     pending = plan.build(files, {}, refs)
     messages = []
 
-    outcome = apply.run(w, pending, refs, files=files, destroy=True, log=messages.append)
+    outcome = apply.run(
+        w, pending, refs, files=files, destroy=True, log=messages.append
+    )
 
     assert [op[0] for op in w.sent] == ["create", "link"]
     assert not any(op[0] == "destroy" for op in w.sent)
@@ -403,7 +468,9 @@ def test_destroy_refuses_a_reused_object_number_with_the_wrong_generation():
     )
 
     assert w.registry == {"old": reused}
-    assert outcome.failed == [("recycle old (#201)", "E_INVARG: generation mismatch for old")]
+    assert outcome.failed == [
+        ("recycle old (#201)", "E_INVARG: generation mismatch for old")
+    ]
 
 
 def test_failed_recycle_is_not_unregistered_while_other_destroys_continue():
@@ -449,7 +516,11 @@ def test_destroy_is_skipped_when_initialize_rebinds_an_orphan_and_create_fails()
                 # initialize unregisters the orphan and registers the new object.
                 self.registry.pop("auto_child")
                 self.registry["auto_child"] = child
-                return [0, "E_INVARG", "object #200 is already registered as auto_child; cannot bind key child"]
+                return [
+                    0,
+                    "E_INVARG",
+                    "object #200 is already registered as auto_child; cannot bind key child",
+                ]
             return super()._op(op)
 
         def read_registry(self):
@@ -466,7 +537,10 @@ def test_destroy_is_skipped_when_initialize_rebinds_an_orphan_and_create_fails()
     assert recycled == []
     assert not any(op[0] == "destroy" for op in w.sent)
     assert outcome.failed == [
-        ("create child (Child)", "E_INVARG: object #200 is already registered as auto_child; cannot bind key child"),
+        (
+            "create child (Child)",
+            "E_INVARG: object #200 is already registered as auto_child; cannot bind key child",
+        ),
     ]
     assert refs.registry == w.registry == w.saved == {"auto_child": child}
 
@@ -488,7 +562,9 @@ def test_destroy_recovers_an_already_recycled_orphan_in_one_helper_call():
     refs = verify_bindings(w, {"old": old})
     for _ in range(2):
         pending = plan.build({}, {}, refs)
-        outcome = apply.run(w, pending, refs, files={}, destroy=True, log=lambda _: None)
+        outcome = apply.run(
+            w, pending, refs, files={}, destroy=True, log=lambda _: None
+        )
         assert outcome.failed == []
         assert refs.registry == w.saved == {}
     assert w.batches == [[["destroy", "old", old, "generation-old"]]]
@@ -510,15 +586,28 @@ def test_ops_are_split_before_the_configured_batch_limit():
 
 def test_scoped_post_create_replan_keeps_live_ancestry_outside_group(monkeypatch):
     from copy import deepcopy
+
     from terramoo import export
-    refs = Refs(ME, Registry({"parent": Obj(200), "door": Obj(201)}, {"parent": "a", "door": "b"}), {"exit": Obj(7)})
+
+    refs = Refs(
+        ME,
+        Registry({"parent": Obj(200), "door": Obj(201)}, {"parent": "a", "door": "b"}),
+        {"exit": Obj(7)},
+    )
     parent = ObjectDef("parent", "Exit class", Ref("$", "exit"))
-    desired = ObjectDef("door", "Door", Ref("@", "parent"), props=[PropDef("source", Obj(11), defined=False)])
+    desired = ObjectDef(
+        "door",
+        "Door",
+        Ref("@", "parent"),
+        props=[PropDef("source", Obj(11), defined=False)],
+    )
     current = deepcopy(desired)
     current.props[0].value = Obj(10)
     live = {"parent": parent, "door": current}
     monkeypatch.setattr(export, "export", lambda w, r, keys: {k: live[k] for k in keys})
-    ops = apply._replan_created(None, [], ["door"], {"parent": parent, "door": desired}, refs, full_context=True)
+    ops = apply._replan_created(
+        None, [], ["door"], {"parent": parent, "door": desired}, refs, full_context=True
+    )
     endpoint = next(op for op in ops if op[0] == "endpoint")
     assert endpoint[2:6] == ("source", Obj(10), Obj(11), 1)
 
@@ -573,7 +662,9 @@ def test_a_short_result_list_is_reported_and_state_is_still_saved():
     hall = Obj(200)
     w = ShortReplyWorld()
     refs = verify_bindings(w, {"hall": hall})
-    p = plan.Plan(ops=[("name", Ref("@", "hall"), "A"), ("flags", Ref("@", "hall"), "r")])
+    p = plan.Plan(
+        ops=[("name", Ref("@", "hall"), "A"), ("flags", Ref("@", "hall"), "r")]
+    )
 
     outcome = apply.run(w, p, refs, files={}, log=lambda _: None)
     assert outcome.done == ["name @hall A"]

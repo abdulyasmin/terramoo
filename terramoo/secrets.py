@@ -16,7 +16,9 @@ from pathlib import Path
 from .errors import MooError
 
 KEYCHAIN_SERVICE = "terramoo"
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "terramoo"
+CONFIG_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "terramoo"
+)
 ENV_VAR = "TMOO_SECRET"
 
 
@@ -24,7 +26,15 @@ def _keychain_read(world: str) -> str | None:
     if sys.platform != "darwin":
         return None
     r = subprocess.run(
-        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", world, "-w"],
+        [
+            "security",
+            "find-generic-password",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            world,
+            "-w",
+        ],
         capture_output=True,
         text=True,
     )
@@ -40,7 +50,9 @@ def secret_for(world: str) -> str:
     f = CONFIG_DIR / f"{world}.secret"
     if f.exists():
         return f.read_text().strip()
-    raise MooError(f"no secret for world {world}: run `tmoo secret store {world}` or set TMOO_SECRET")
+    raise MooError(
+        f"no secret for world {world}: run `tmoo secret store {world}` or set TMOO_SECRET"
+    )
 
 
 def check_secret(secret: str) -> str:
@@ -54,14 +66,26 @@ def check_secret(secret: str) -> str:
     if not secret:
         raise MooError("empty secret: nothing stored")
     if secret[0] in "{[\"'":
-        raise MooError(f"that starts with {secret[0]!r}, like pasted JSON or quotes: paste only the token itself")
+        raise MooError(
+            f"that starts with {secret[0]!r}, like pasted JSON or quotes: paste only the token itself"
+        )
     return secret
 
 
 def store_secret(world: str, secret: str) -> str:
     if sys.platform == "darwin":
         subprocess.run(
-            ["security", "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", world, "-w", secret],
+            [
+                "security",
+                "add-generic-password",
+                "-U",
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-a",
+                world,
+                "-w",
+                secret,
+            ],
             check=True,
             capture_output=True,
         )

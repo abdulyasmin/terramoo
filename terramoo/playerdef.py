@@ -1,7 +1,7 @@
 """An explicitly selected part of the authenticated player, without a lifecycle."""
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 
 from . import moolit, objdef
 from .errors import MooError
@@ -9,33 +9,83 @@ from .model import ObjectDef, PropDef, VerbDef
 from .moolit import Obj, Ref, walk
 from .world import DEFAULT_IGNORE_PROPS
 
-
 # This list is also substituted into the server reader at bootstrap. Selection
 # is checked there before property_info, is_clear_property, or a value read.
 PROTECTED = DEFAULT_IGNORE_PROPS | {
-    "name", "owner", "parent", "location", "contents", "programmer", "wizard",
-    "r", "w", "f", "aliases", "gender", "home", "display_options", "edit_options",
-    "prog_options", "build_options", "ansi_options", "replace_codes", "key",
-    "ps", "psc", "po", "poc", "pp", "ppc", "pq", "pqc", "pr", "prc", "verb_subs",
-    "eval_env", "eval_ticks", "eval_subs", "out_of_band_session", "reading_input",
-    "last_password_time", "last_connect_attempt", "last_connect_place",
-    "linebuffer", "linesleft", "linetask", "_mail_task", "message_keep_date",
-    "messages_kept", "inline_editor_options", "_terramoo_player_state",
+    "name",
+    "owner",
+    "parent",
+    "location",
+    "contents",
+    "programmer",
+    "wizard",
+    "r",
+    "w",
+    "f",
+    "aliases",
+    "gender",
+    "home",
+    "display_options",
+    "edit_options",
+    "prog_options",
+    "build_options",
+    "ansi_options",
+    "replace_codes",
+    "key",
+    "ps",
+    "psc",
+    "po",
+    "poc",
+    "pp",
+    "ppc",
+    "pq",
+    "pqc",
+    "pr",
+    "prc",
+    "verb_subs",
+    "eval_env",
+    "eval_ticks",
+    "eval_subs",
+    "out_of_band_session",
+    "reading_input",
+    "last_password_time",
+    "last_connect_attempt",
+    "last_connect_place",
+    "linebuffer",
+    "linesleft",
+    "linetask",
+    "_mail_task",
+    "message_keep_date",
+    "messages_kept",
+    "inline_editor_options",
+    "_terramoo_player_state",
 }
 SETTINGS = {"aliases", "gender", "home", "linelen", "pagelen"}
 OPTIONS = {"display", "edit", "prog", "build"}
 
 
 def safe_name(name):
-    if not isinstance(name, str) or not name.strip() or any(ord(c) < 32 or ord(c) == 127 for c in name):
-        raise MooError("player field names must be nonempty strings without control characters")
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or any(ord(c) < 32 or ord(c) == 127 for c in name)
+    ):
+        raise MooError(
+            "player field names must be nonempty strings without control characters"
+        )
     return name
 
 
 def property_name(name):
     safe_name(name)
-    if name.lower() in PROTECTED or any(s in name.lower() for s in ("password", "secret", "token", "credential")) or name.lower().startswith("_terramoo_"):
-        raise MooError(f"player property {name!r} is protected; use a supported setting where applicable")
+    if (
+        name.lower() in PROTECTED
+        or any(s in name.lower() for s in ("password", "secret", "token", "credential"))
+        or name.lower().startswith("_terramoo_")
+    ):
+        raise MooError(
+            f"player property {name!r} is protected; use a supported setting where applicable"
+        )
     return name
 
 
@@ -48,7 +98,12 @@ def setting_name(name):
 
 
 def feature_ref(value):
-    if not isinstance(value, (Ref, Obj)) or isinstance(value, Ref) and value.kind == "@" and value.name.lower() == "me":
+    if (
+        not isinstance(value, (Ref, Obj))
+        or isinstance(value, Ref)
+        and value.kind == "@"
+        and value.name.lower() == "me"
+    ):
         raise MooError("a feature must be an object reference other than @me")
     return value
 
@@ -58,7 +113,12 @@ def slot(kind, name):
 
 
 def player_owner(owner):
-    return owner is None or isinstance(owner, Ref) and owner.kind == "@" and owner.name.lower() == "me"
+    return (
+        owner is None
+        or isinstance(owner, Ref)
+        and owner.kind == "@"
+        and owner.name.lower() == "me"
+    )
 
 
 @dataclass
@@ -71,25 +131,40 @@ class PlayerDef:
 
     def entries(self):
         entries = {}
+
         def add(kind, name, value):
             key = slot(kind, name)
             if key in entries:
                 raise MooError(f"duplicate player field {key}")
             entries[key] = (kind, name, value)
+
         for prop in self.props:
             property_name(prop.name)
             if not player_owner(prop.owner) or set(prop.perms) - set("rwc"):
-                raise MooError(f"player property {prop.name}: owner must be @me and flags must be rwc")
+                raise MooError(
+                    f"player property {prop.name}: owner must be @me and flags must be rwc"
+                )
             add("property", prop.name, prop)
         for verb in self.verbs:
             safe_name(verb.names)
             if not player_owner(verb.owner) or set(verb.perms) - set("rwxd"):
-                raise MooError(f"player verb {verb.names}: owner must be @me and flags must be rwxd")
-            if verb.args[0] not in {"this", "any", "none"} or verb.args[2] not in {"this", "any", "none"}:
-                raise MooError(f"player verb {verb.names}: invalid argument specification")
+                raise MooError(
+                    f"player verb {verb.names}: owner must be @me and flags must be rwxd"
+                )
+            if verb.args[0] not in {"this", "any", "none"} or verb.args[2] not in {
+                "this",
+                "any",
+                "none",
+            }:
+                raise MooError(
+                    f"player verb {verb.names}: invalid argument specification"
+                )
             add("verb", verb.names, verb)
         for name, value in self.settings.items():
-            if name == "aliases" and (not isinstance(value, list) or any(not isinstance(v, str) or not v for v in value)):
+            if name == "aliases" and (
+                not isinstance(value, list)
+                or any(not isinstance(v, str) or not v for v in value)
+            ):
                 raise MooError("aliases must be a list of nonempty strings")
             if name == "gender" and not isinstance(value, str):
                 raise MooError("gender must be a string understood by the core")
@@ -138,7 +213,9 @@ def parse(text):
             body.extend(lines[start:i])
         elif line.startswith("setting "):
             statement, i = objdef._read_statement(lines, i)
-            match = re.fullmatch(r'\s*setting\s+("(?:[^"\\]|\\.)*"|\S+)\s*=\s*(.*)', statement, re.S)
+            match = re.fullmatch(
+                r'\s*setting\s+("(?:[^"\\]|\\.)*"|\S+)\s*=\s*(.*)', statement, re.DOTALL
+            )
             if not match:
                 raise MooError("expected setting NAME = VALUE;")
             name = objdef._parse_ident(match[1]).lower()
@@ -153,8 +230,14 @@ def parse(text):
                 kind = "feature"
             else:
                 kind, _, rest = rest.strip().partition(" ")
-                if kind not in ("property", "verb") or action == "clear" and kind != "property":
-                    raise MooError("use remove property, remove verb, clear property, or detach")
+                if (
+                    kind not in ("property", "verb")
+                    or action == "clear"
+                    and kind != "property"
+                ):
+                    raise MooError(
+                        "use remove property, remove verb, clear property, or detach"
+                    )
                 name = objdef._parse_ident(rest.strip())
             if action == "feature":
                 result.features.append(name)
@@ -165,7 +248,9 @@ def parse(text):
                 result.removals[key] = (action, kind, name)
         else:
             raise MooError(f"unsupported player declaration: {line}")
-    obj = objdef.parse('object player\n  name: ""\n  parent: #-1\n' + "\n".join(body) + '\nendobject\n')
+    obj = objdef.parse(
+        'object player\n  name: ""\n  parent: #-1\n' + "\n".join(body) + "\nendobject\n"
+    )
     result.props, result.verbs = obj.props, obj.verbs
     result.entries()
     return result
@@ -177,17 +262,27 @@ def render(profile):
     body = objdef.render(obj).splitlines()[3:-1]
     out = ["player", *body]
     for name, value in profile.settings.items():
-        out.append(f"  setting {objdef._ident_or_quoted(name)} = {objdef._render_value(value)};")
+        out.append(
+            f"  setting {objdef._ident_or_quoted(name)} = {objdef._render_value(value)};"
+        )
     for feature in profile.features:
         out.append(f"  feature {feature};")
     for action, kind, name in profile.removals.values():
-        out.append(f"  detach {name};" if kind == "feature" else f"  {action} {kind} {objdef._ident_or_quoted(name)};")
+        out.append(
+            f"  detach {name};"
+            if kind == "feature"
+            else f"  {action} {kind} {objdef._ident_or_quoted(name)};"
+        )
     return "\n".join([*out, "endplayer", ""])
 
 
 def values(profile):
-    return [*(p.value for p in profile.props), *profile.settings.values(), *profile.features,
-            *(name for _, kind, name in profile.removals.values() if kind == "feature")]
+    return [
+        *(p.value for p in profile.props),
+        *profile.settings.values(),
+        *profile.features,
+        *(name for _, kind, name in profile.removals.values() if kind == "feature"),
+    ]
 
 
 def map_refs(profile, transform):
@@ -195,6 +290,11 @@ def map_refs(profile, transform):
         prop.value = walk(prop.value, transform)
     profile.settings = {k: walk(v, transform) for k, v in profile.settings.items()}
     profile.features = [walk(v, transform) for v in profile.features]
-    profile.removals = {slot(kind, name): (action, kind, name) for action, kind, name in (
-        (a, k, walk(n, transform) if k == "feature" else n) for a, k, n in profile.removals.values())}
+    profile.removals = {
+        slot(kind, name): (action, kind, name)
+        for action, kind, name in (
+            (a, k, walk(n, transform) if k == "feature" else n)
+            for a, k, n in profile.removals.values()
+        )
+    }
     return profile

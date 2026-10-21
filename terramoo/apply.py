@@ -28,6 +28,7 @@ class Outcome:
 
 def _resolve_op(op: tuple, refs: Refs) -> list:
     """Resolve an op and retain its registry identity for helper-side CAS."""
+
     def binding(ref: Ref) -> list:
         key = refs.registry_key(ref.name) or ref.name
         obj = refs.resolve_ref(ref)
@@ -40,17 +41,25 @@ def _resolve_op(op: tuple, refs: Refs) -> list:
         return [key, obj, nonce]
 
     if op[0] == "link":
-        return ["link", [binding(r) for r in op[1] if refs.registry_key(r.name) is not None]]
+        return [
+            "link",
+            [binding(r) for r in op[1] if refs.registry_key(r.name) is not None],
+        ]
     if not isinstance(op[1], Ref) or op[1].kind != "@":
         raise MooError(f"{op[0]} has no managed-object key")
     key, obj, nonce = binding(op[1])
     return [
-        op[0], key, obj, nonce,
+        op[0],
+        key,
+        obj,
+        nonce,
         *(refs.resolve(v.index if isinstance(v, VerbTarget) else v) for v in op[2:]),
     ]
 
 
-def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, log) -> list[object | None]:
+def _send(
+    world: World, ops: list[list], labels: list[str], outcome: Outcome, log
+) -> list[object | None]:
     batch, batch_labels, size = [], [], 0
     received: list[object | None] = []
     limit = world.transport.batch_bytes
@@ -61,7 +70,9 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
             return
         session = getattr(world, "_package_session", None)
         outgoing = session.before_batch(batch) if session else batch
-        results = world.eval(world.helper("tmoo_apply", moolit.serialize(outgoing, dialect=dialect)))
+        results = world.eval(
+            world.helper("tmoo_apply", moolit.serialize(outgoing, dialect=dialect))
+        )
         if session:
             session.after_batch(batch, results)
         if not isinstance(results, list):
@@ -86,14 +97,18 @@ def _send(world: World, ops: list[list], labels: list[str], outcome: Outcome, lo
                 outcome.failed.append((label, why))
                 log(f"  FAIL {label}: {why}")
         if len(results) != len(batch):
-            outcome.failed.append(("batch", f"{len(batch)} ops sent, {len(results)} results"))
+            outcome.failed.append(
+                ("batch", f"{len(batch)} ops sent, {len(results)} results")
+            )
             received.extend([None] * max(0, len(batch) - len(results)))
         batch.clear()
         batch_labels.clear()
 
     for op, label in zip(ops, labels):
         session = getattr(world, "_package_session", None)
-        text = moolit.serialize(["owned", session.epoch, op] if session else op, dialect=dialect)
+        text = moolit.serialize(
+            ["owned", session.epoch, op] if session else op, dialect=dialect
+        )
         length = len(text.encode()) + 2
         if batch and size + length > limit:
             flush()
@@ -110,11 +125,15 @@ def _depends_on_unlink(unlink: tuple, following: tuple) -> bool:
         return False
     if unlink[1] != following[1]:
         return False
-    expected = "source" if unlink[2] == "exit" else "dest" if unlink[2] == "entrance" else None
+    expected = (
+        "source" if unlink[2] == "exit" else "dest" if unlink[2] == "entrance" else None
+    )
     return expected is not None and str(following[2]).lower() == expected
 
 
-def _apply_ops(world: World, plan_ops: list[tuple], refs: Refs, outcome: Outcome, log) -> None:
+def _apply_ops(
+    world: World, plan_ops: list[tuple], refs: Refs, outcome: Outcome, log
+) -> None:
     """Resolve and batch normal ops, but gate endpoint changes on unlink.
 
     A failed unlink followed by a successful `setprop source`/`dest` would
@@ -169,34 +188,54 @@ def _apply_ops(world: World, plan_ops: list[tuple], refs: Refs, outcome: Outcome
     flush()
 
 
-def _replan_created(world: World, plan_ops: list[tuple], created: list[str], files: dict, refs: Refs,
-                    *, full_context=False) -> list[tuple]:
+def _replan_created(
+    world: World,
+    plan_ops: list[tuple],
+    created: list[str],
+    files: dict,
+    refs: Refs,
+    *,
+    full_context=False,
+) -> list[tuple]:
     """Ops for the objects just created, diffed against what they actually
     are now: a core's `initialize` sets properties of its own (LambdaCore's
     `key = 0`, for one) that a plan made before the create cannot know."""
     from .export import export
 
-    context = [k for key in files if (k := refs.registry_key(key)) is not None] if full_context else created
+    context = (
+        [k for key in files if (k := refs.registry_key(key)) is not None]
+        if full_context
+        else created
+    )
     live = export(world, refs, context)
     files_by_name = {key.lower(): value for key, value in files.items()}
     created_folded = {key.lower() for key in created}
-    kept = [op for op in plan_ops
-            if op[0] == "link" or not (
-                isinstance(op[1], Ref) and op[1].kind == "@" and op[1].name.lower() in created_folded
-            )]
+    kept = [
+        op
+        for op in plan_ops
+        if op[0] == "link"
+        or not (
+            isinstance(op[1], Ref)
+            and op[1].kind == "@"
+            and op[1].name.lower() in created_folded
+        )
+    ]
     wanted_exits = _exit_classes(files, refs, live=False)
     current_exits = _exit_classes(
         {key: obj for key, obj in live.items() if obj is not None}, refs, live=True
     )
     fresh = [
         op
-        for key in created if live.get(key) is not None
+        for key in created
+        if live.get(key) is not None
         for op in diff_object(
             key,
             files_by_name[key.lower()],
             live[key],
             refs,
-            was_exit=current_exits.get(key.lower(), wanted_exits.get(key.lower(), False)),
+            was_exit=current_exits.get(
+                key.lower(), wanted_exits.get(key.lower(), False)
+            ),
             will_exit=wanted_exits.get(key.lower(), False),
         )
     ]
@@ -204,8 +243,17 @@ def _replan_created(world: World, plan_ops: list[tuple], created: list[str], fil
     return [op for op in kept if op[0] != "link"] + fresh + links
 
 
-def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = False,
-        stop_on_create_failure: bool = False, replan_keys: set[str] | None = None, log=print) -> Outcome:
+def run(
+    world: World,
+    plan: Plan,
+    refs: Refs,
+    *,
+    files: dict,
+    destroy: bool = False,
+    stop_on_create_failure: bool = False,
+    replan_keys: set[str] | None = None,
+    log=print,
+) -> Outcome:
     """Apply `plan`, made from `files`.  The objects it creates are re-read
     once they exist and diffed again."""
     outcome = Outcome()
@@ -214,19 +262,29 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
     player_guard = None
     if isinstance(world, World) and destroy and plan.destroys:
         from .player import incoming_check
+
         player_guard = incoming_check(world, refs, plan.destroys)
     plan_ops = list(plan.ops)
     if plan.creates:
         log("creating:")
         session = getattr(world, "_package_session", None)
-        if session and any(key.lower() not in session.nonces for key, _, _ in plan.creates):
-            raise MooError("live changes require additional creates; replan before applying")
-        create_nonces = {key: session.nonces[key.lower()] if session else uuid4().hex for key, _, _ in plan.creates}
+        if session and any(
+            key.lower() not in session.nonces for key, _, _ in plan.creates
+        ):
+            raise MooError(
+                "live changes require additional creates; replan before applying"
+            )
+        create_nonces = {
+            key: session.nonces[key.lower()] if session else uuid4().hex
+            for key, _, _ in plan.creates
+        }
         ops = [
             [
                 "create",
                 key,
-                refs.registry[refs.registry_key(key)] if refs.registry_key(key) is not None else Obj(-1),
+                refs.registry[refs.registry_key(key)]
+                if refs.registry_key(key) is not None
+                else Obj(-1),
                 refs.generation_for(key) or "",
                 refs.resolve(parent),
                 name,
@@ -239,7 +297,11 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         refs.replace_registry(world.read_registry())
         created = []
         for (key, _, _), label, result in zip(plan.creates, labels, results):
-            returned = result[1] if isinstance(result, list) and len(result) >= 2 and result[0] == 1 else None
+            returned = (
+                result[1]
+                if isinstance(result, list) and len(result) >= 2 and result[0] == 1
+                else None
+            )
             actual_key = refs.registry_key(key)
             if (
                 isinstance(returned, Obj)
@@ -270,10 +332,23 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         refs.pending = failed_created
         refs.reindex()
         if created:
-            recheck = created if replan_keys is None else [
-                key for name in replan_keys if (key := refs.registry_key(name)) is not None
-            ]
-            plan_ops = _replan_created(world, plan_ops, recheck, files, refs, full_context=replan_keys is not None)
+            recheck = (
+                created
+                if replan_keys is None
+                else [
+                    key
+                    for name in replan_keys
+                    if (key := refs.registry_key(name)) is not None
+                ]
+            )
+            plan_ops = _replan_created(
+                world,
+                plan_ops,
+                recheck,
+                files,
+                refs,
+                full_context=replan_keys is not None,
+            )
         # A key whose create failed now fails to resolve, so each op that
         # needs it is skipped instead of sending `@key` to the MOO.
         refs.pending = set()
@@ -282,7 +357,9 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
         _apply_ops(world, plan_ops, refs, outcome, log)
     refs.pending = set()
     if destroy and plan.destroys and outcome.failed:
-        log("skipping recycling: earlier create or apply operations failed; run a clean apply to retry")
+        log(
+            "skipping recycling: earlier create or apply operations failed; run a clean apply to retry"
+        )
     elif destroy and plan.destroys:
         log("recycling:")
         ops, labels = [], []
@@ -298,7 +375,15 @@ def run(world: World, plan: Plan, refs: Refs, *, files: dict, destroy: bool = Fa
                 outcome.failed.append((label, why))
                 log(f"  SKIP {label}: {why}")
                 continue
-            ops.append(["destroy", key, o, nonce, *([player_guard] if player_guard is not None else [])])
+            ops.append(
+                [
+                    "destroy",
+                    key,
+                    o,
+                    nonce,
+                    *([player_guard] if player_guard is not None else []),
+                ]
+            )
             labels.append(label)
         _send(world, ops, labels, outcome, log)
     refs.replace_registry(world.read_registry())

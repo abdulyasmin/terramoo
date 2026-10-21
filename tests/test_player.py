@@ -5,18 +5,27 @@ import pytest
 
 from terramoo import cli, player, playerdef
 from terramoo.errors import MooError
-from terramoo.model import PropDef, VerbDef
 from terramoo.moolit import Obj, Ref
 from terramoo.refs import Refs, Registry
-from terramoo.storage import json_text, read_json, transaction
-from terramoo.world import World, HELPER_VERBS, helper_source
+from terramoo.storage import read_json, transaction
+from terramoo.world import HELPER_VERBS, World, helper_source
 
 
 class Server:
     def __init__(self):
         self.state = [1, "", 0, "", 0, "idle", []]
-        self.rows = {("property", "description"): [1, 0, 0, Obj(1), "rc", "original"],
-                     ("verb", "probe"): [1, 1, Obj(1), "rd", "probe", ["any", "any", "any"], ["return 1;"]]}
+        self.rows = {
+            ("property", "description"): [1, 0, 0, Obj(1), "rc", "original"],
+            ("verb", "probe"): [
+                1,
+                1,
+                Obj(1),
+                "rd",
+                "probe",
+                ["any", "any", "any"],
+                ["return 1;"],
+            ],
+        }
         self.writes = 0
         self.lose = None
 
@@ -25,7 +34,11 @@ class Server:
             return [1, "", "", []]
         if helper == "tmoo_player_read":
             if mode == "features":
-                return [key[1] for key, row in self.rows.items() if key[0] == "feature" and row[1]]
+                return [
+                    key[1]
+                    for key, row in self.rows.items()
+                    if key[0] == "feature" and row[1]
+                ]
             return deepcopy(self.rows.get(tuple(args[0]), [0]))
         if helper == "tmoo_player_write":
             assert mode == "check"
@@ -50,7 +63,15 @@ class Server:
             elif kind == "property":
                 row = [1, action[1], 0, Obj(1), action[3], action[2]]
             elif kind == "verb":
-                row = [1, row[1] if row[0] else 2, Obj(1), action[1], name, action[2], action[3]]
+                row = [
+                    1,
+                    row[1] if row[0] else 2,
+                    Obj(1),
+                    action[1],
+                    name,
+                    action[2],
+                    action[3],
+                ]
             elif kind == "feature":
                 row = [1, int(action[0] != "detach")]
             else:
@@ -74,7 +95,11 @@ def setup(tmp_path, monkeypatch):
     w.objects_dir.mkdir(parents=True)
     (w.dir / "world.toml").write_text('player = "tester"\n')
     w._player, w._toolbox = Obj(1), Obj(2)
-    monkeypatch.setattr(w, "refs", lambda: Refs(Obj(1), Registry({"feature": Obj(3)}, {"feature": "nonce"})))
+    monkeypatch.setattr(
+        w,
+        "refs",
+        lambda: Refs(Obj(1), Registry({"feature": Obj(3)}, {"feature": "nonce"})),
+    )
     server = Server()
     monkeypatch.setattr(player, "call", server.call)
     return w, server
@@ -87,7 +112,7 @@ def edit(w, update):
 
 
 def test_round_trip_distinguishes_clear_overrides_and_explicit_removal():
-    text = '''player
+    text = """player
   override description = {"one", "two"};
   property favorite (flags: "rc") = @feature;
   setting "display:shortprep" = 1;
@@ -98,13 +123,30 @@ def test_round_trip_distinguishes_clear_overrides_and_explicit_removal():
     return "endplayer";
   endverb
 endplayer
-'''
+"""
     result = playerdef.parse(text)
     assert playerdef.parse(playerdef.render(result)) == result
     assert len(result.entries()) == 7
 
 
-@pytest.mark.parametrize("name", ["password", "Password", "api_token", "email_address", "messages", "tmoo", "location", "gender", "aliases", "features", "ps", "ansi_options", "_terramoo_player_state"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "password",
+        "Password",
+        "api_token",
+        "email_address",
+        "messages",
+        "tmoo",
+        "location",
+        "gender",
+        "aliases",
+        "features",
+        "ps",
+        "ansi_options",
+        "_terramoo_player_state",
+    ],
+)
 def test_protected_properties_fail_before_read(setup, name):
     w, server = setup
     with pytest.raises(MooError, match="protected"):
@@ -114,7 +156,17 @@ def test_protected_properties_fail_before_read(setup, name):
     assert server.writes == 0
 
 
-@pytest.mark.parametrize("body", ['name: "oops"', 'parent: #1', 'location: #1', 'flags: "w"', 'setting password = "oops";', 'property x (owner: #5) = 1;'])
+@pytest.mark.parametrize(
+    "body",
+    [
+        'name: "oops"',
+        "parent: #1",
+        "location: #1",
+        'flags: "w"',
+        'setting password = "oops";',
+        "property x (owner: #5) = 1;",
+    ],
+)
 def test_no_player_lifecycle_or_unsupported_setting(body):
     with pytest.raises((MooError, ValueError)):
         playerdef.parse(f"player\n  {body}\nendplayer\n")
@@ -248,7 +300,9 @@ def test_explicit_removal_and_untracking_are_different(setup):
 def test_feature_removal_after_package_files_are_staged_for_deletion(setup):
     w, server = setup
     server.rows[("feature", Obj(3))] = [1, 1]
-    (w.objects_dir / "feature.moo").write_text('object feature\n name: "Feature"\n parent: #-1\nendobject\n')
+    (w.objects_dir / "feature.moo").write_text(
+        'object feature\n name: "Feature"\n parent: #-1\nendobject\n'
+    )
     player.track(w, [("feature", Ref("@", "feature"))])
     player.stage_removal(w, [("feature", Ref("@", "feature"))], "detach")
     (w.objects_dir / "feature.moo").unlink()
@@ -279,14 +333,21 @@ def test_incoming_live_player_reference_blocks_deletion(setup):
 def test_builtin_player_alias_cannot_be_adopted(monkeypatch):
     w = SimpleNamespace(refs=lambda: Refs(Obj(1)))
     with pytest.raises(MooError, match="cannot be adopted"):
-        cli._adopt_locked(w, SimpleNamespace(owned=False, verify=False, object="#1", key="character"))
+        cli._adopt_locked(
+            w, SimpleNamespace(owned=False, verify=False, object="#1", key="character")
+        )
 
 
 def test_bootstrap_substitutes_the_protected_name_policy():
     source = "\n".join(helper_source("tmoo_player_read"))
     assert "__TMOO_PLAYER_PROTECTED__" not in source
     assert '"password"' in source and '"out_of_band_session"' in source
-    assert all(32 <= ord(c) < 127 for name in HELPER_VERBS for line in helper_source(name) for c in line)
+    assert all(
+        32 <= ord(c) < 127
+        for name in HELPER_VERBS
+        for line in helper_source(name)
+        for c in line
+    )
 
 
 def test_new_player_file_rejects_symlinks(setup, tmp_path):
@@ -301,11 +362,15 @@ def test_new_player_file_rejects_symlinks(setup, tmp_path):
 def test_concurrent_file_edit_is_preserved_while_tracking(setup, monkeypatch):
     w, server = setup
     original = server.call
+
     def edited(world, helper, mode, *args):
         result = original(world, helper, mode, *args)
         if helper == "tmoo_player_read":
-            player.paths(w)[0].write_text('player\n property local_edit (flags: "rc") = 1;\nendplayer\n')
+            player.paths(w)[0].write_text(
+                'player\n property local_edit (flags: "rc") = 1;\nendplayer\n'
+            )
         return result
+
     monkeypatch.setattr(player, "call", edited)
     with pytest.raises(MooError, match="changed"):
         player.track(w, [("property", "description")])
@@ -334,11 +399,13 @@ def test_receipt_edit_during_apply_is_preserved_until_reconciled(setup, monkeypa
     original = server.call
     receipt = player.paths(w)[1]
     before = receipt.read_bytes()
+
     def edited(world, helper, mode, *args):
         result = original(world, helper, mode, *args)
         if helper == "tmoo_player" and mode == "apply":
             receipt.write_text('{"concurrent": "edit"}\n')
         return result
+
     monkeypatch.setattr(player, "call", edited)
     with pytest.raises(MooError, match="changed during player application"):
         player.apply(player.prepare(w))
@@ -350,17 +417,24 @@ def test_receipt_edit_during_apply_is_preserved_until_reconciled(setup, monkeypa
     assert not player.prepare(w).changes
 
 
-def test_namespace_migration_preserves_edits_made_while_rewriting_player(setup, monkeypatch):
+def test_namespace_migration_preserves_edits_made_while_rewriting_player(
+    setup, monkeypatch
+):
     from terramoo import migrations
     from terramoo.installation import Store
+
     w, _ = setup
-    (w.objects_dir / "feature.moo").write_text('object feature\n name: "Feature"\n parent: #-1\nendobject\n')
-    player.paths(w)[0].write_text('player\n feature @feature;\nendplayer\n')
+    (w.objects_dir / "feature.moo").write_text(
+        'object feature\n name: "Feature"\n parent: #-1\nendobject\n'
+    )
+    player.paths(w)[0].write_text("player\n feature @feature;\nendplayer\n")
     original = player.rewrite_files
+
     def edited(world, mapping):
         result = original(world, mapping)
-        player.paths(world)[0].write_text('player\n property edit = 1;\nendplayer\n')
+        player.paths(world)[0].write_text("player\n property edit = 1;\nendplayer\n")
         return result
+
     monkeypatch.setattr(player, "rewrite_files", edited)
     proposal = migrations.prepare(Store(w), {"feature": "renamed"})
     with pytest.raises(MooError, match="changed"):
@@ -370,9 +444,13 @@ def test_namespace_migration_preserves_edits_made_while_rewriting_player(setup, 
 
 def test_feature_aliases_cannot_manage_the_same_live_feature_twice(setup):
     w, server = setup
-    (w.objects_dir / "feature.moo").write_text('object feature\n name: "Feature"\n parent: #-1\nendobject\n')
+    (w.objects_dir / "feature.moo").write_text(
+        'object feature\n name: "Feature"\n parent: #-1\nendobject\n'
+    )
     server.rows[("feature", Obj(3))] = [1, 0]
-    player.paths(w)[0].write_text('player\n feature @feature;\n feature #3;\nendplayer\n')
+    player.paths(w)[0].write_text(
+        "player\n feature @feature;\n feature #3;\nendplayer\n"
+    )
     with pytest.raises(MooError, match="same live player field"):
         player.prepare(w)
     assert server.writes == 0

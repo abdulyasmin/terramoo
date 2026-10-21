@@ -11,29 +11,56 @@ from terramoo.refs import Refs, Registry
 
 def context(tmp_path, monkeypatch):
     world = SimpleNamespace(dir=tmp_path)
-    item = {"id": "instance-id", "state": "prepared", "revision": "desired", "tombstones": {},
-            "objects": {"room": {"key": "north__room", "module": "rooms"}}}
-    store = SimpleNamespace(instances={"north": item}, lock={"world_id": "world-id", "local_modules": {}})
+    item = {
+        "id": "instance-id",
+        "state": "prepared",
+        "revision": "desired",
+        "tombstones": {},
+        "objects": {"room": {"key": "north__room", "module": "rooms"}},
+    }
+    store = SimpleNamespace(
+        instances={"north": item}, lock={"world_id": "world-id", "local_modules": {}}
+    )
     graph = SimpleNamespace(membership={"north__room": "north/rooms"})
-    refs = Refs(Obj(1), Registry({"north__room": Obj(20)}, {"north__room": "generation"}))
-    remote = {"world_id": "world-id", "epoch": "current", "entries": {
-        "north__room": ["north__room", "generation", "instance-id", 1]}}
-    receipt = {"world_id": "world-id", "epoch": "current", "identity": {"world": "test"}, "bindings": {
-        "north__room": {"owner": "instance-id", "object": 20, "generation": "generation"}}}
+    refs = Refs(
+        Obj(1), Registry({"north__room": Obj(20)}, {"north__room": "generation"})
+    )
+    remote = {
+        "world_id": "world-id",
+        "epoch": "current",
+        "entries": {"north__room": ["north__room", "generation", "instance-id", 1]},
+    }
+    receipt = {
+        "world_id": "world-id",
+        "epoch": "current",
+        "identity": {"world": "test"},
+        "bindings": {
+            "north__room": {
+                "owner": "instance-id",
+                "object": 20,
+                "generation": "generation",
+            }
+        },
+    }
     monkeypatch.setattr(ownership, "read_remote", lambda w: remote)
     monkeypatch.setattr(ownership, "read_receipt", lambda w, s: receipt)
     monkeypatch.setattr(ownership, "identity", lambda w: {"world": "test"})
     return world, store, graph, refs, remote, receipt
 
 
-@pytest.mark.parametrize("change, message", [
-    ("epoch", "revision differs"),
-    ("world", "revision differs"),
-    ("missing", "no matching deployment receipt"),
-    ("generation", "matching installation receipt"),
-    ("owner", "another installation"),
-])
-def test_stale_or_wrong_identity_cannot_authorize_package_mutation(tmp_path, monkeypatch, change, message):
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ("epoch", "revision differs"),
+        ("world", "revision differs"),
+        ("missing", "no matching deployment receipt"),
+        ("generation", "matching installation receipt"),
+        ("owner", "another installation"),
+    ],
+)
+def test_stale_or_wrong_identity_cannot_authorize_package_mutation(
+    tmp_path, monkeypatch, change, message
+):
     world, store, graph, refs, remote, receipt = context(tmp_path, monkeypatch)
     if change == "epoch":
         receipt["epoch"] = "stale"

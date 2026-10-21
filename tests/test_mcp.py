@@ -45,7 +45,11 @@ def test_install_verb_uses_the_set_verb_tool_and_creates_when_missing():
     t.install_verb(Obj(9), "tmoo_info", ["return 1;"])
     name, args = t.sent[-1]
     assert name == "set_verb"
-    assert args["create"] is True and args["code"] == "return 1;" and args["object"] == "#9"
+    assert (
+        args["create"] is True
+        and args["code"] == "return 1;"
+        and args["object"] == "#9"
+    )
 
 
 class Response:
@@ -69,7 +73,11 @@ def test_rpc_sends_bearer_json_and_increments_request_ids(monkeypatch):
     def urlopen(request, timeout):
         requests.append((request, timeout))
         request_id = json.loads(request.data)["id"]
-        return Response(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"ok": request_id}}))
+        return Response(
+            json.dumps(
+                {"jsonrpc": "2.0", "id": request_id, "result": {"ok": request_id}}
+            )
+        )
 
     monkeypatch.setattr(mcp.urllib.request, "urlopen", urlopen)
     t = McpTransport("https://moo.example/mcp", "secret-token", timeout=12)
@@ -80,7 +88,12 @@ def test_rpc_sends_bearer_json_and_increments_request_ids(monkeypatch):
     assert timeout == 12
     assert first.get_header("Authorization") == "Bearer secret-token"
     assert first.get_header("Content-type") == "application/json"
-    assert json.loads(first.data) == {"jsonrpc": "2.0", "id": 1, "method": "one", "params": {"x": 1}}
+    assert json.loads(first.data) == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "one",
+        "params": {"x": 1},
+    }
 
 
 def test_rpc_uses_the_last_sse_data_event(monkeypatch):
@@ -90,26 +103,38 @@ def test_rpc_uses_the_last_sse_data_event(monkeypatch):
         "urlopen",
         lambda request, timeout: Response(body, "text/event-stream; charset=utf-8"),
     )
-    assert McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {}) == {"value": 3}
+    assert McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {}) == {
+        "value": 3
+    }
 
 
 def test_rpc_turns_http_and_network_errors_into_moo_errors(monkeypatch):
-    error = urllib.error.HTTPError("https://moo.example/mcp", 403, "Forbidden", {}, io.BytesIO(b"denied"))
-    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(error))
+    error = urllib.error.HTTPError(
+        "https://moo.example/mcp", 403, "Forbidden", {}, io.BytesIO(b"denied")
+    )
+    monkeypatch.setattr(
+        mcp.urllib.request,
+        "urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(error),
+    )
     with pytest.raises(MooError, match="HTTP 403.*denied"):
         McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
 
     monkeypatch.setattr(
         mcp.urllib.request,
         "urlopen",
-        lambda request, timeout: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+        lambda request, timeout: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
     )
     with pytest.raises(MooError, match="cannot reach .*offline"):
         McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
 
 
 def test_rpc_rejects_invalid_json_as_a_transport_error(monkeypatch):
-    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response("not json"))
+    monkeypatch.setattr(
+        mcp.urllib.request, "urlopen", lambda request, timeout: Response("not json")
+    )
     with pytest.raises(MooError, match="invalid JSON-RPC response"):
         McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
 
@@ -123,7 +148,9 @@ def test_rpc_rejects_invalid_json_as_a_transport_error(monkeypatch):
     ],
 )
 def test_rpc_rejects_malformed_json_rpc_envelopes(monkeypatch, body, expected):
-    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response(body))
+    monkeypatch.setattr(
+        mcp.urllib.request, "urlopen", lambda request, timeout: Response(body)
+    )
 
     with pytest.raises(MooError, match=expected):
         McpTransport("https://moo.example/mcp", "token").rpc("tools/list", {})
@@ -148,7 +175,10 @@ def test_call_tool_rejects_a_malformed_tool_result(result):
 
 def test_tool_errors_and_set_prop_payloads_are_preserved():
     t = McpTransport("https://moo.example/mcp", "token")
-    t.rpc = lambda method, params: {"isError": True, "content": [{"type": "text", "text": "denied"}]}
+    t.rpc = lambda method, params: {
+        "isError": True,
+        "content": [{"type": "text", "text": "denied"}],
+    }
     with pytest.raises(MooError, match="denied"):
         t.call_tool("set_prop", {})
 
@@ -158,7 +188,11 @@ def test_tool_errors_and_set_prop_payloads_are_preserved():
     assert sent == [
         (
             "set_prop",
-            {"object": "#9", "prop": 'odd "name', "value": moolit.serialize([Obj(2), "value"])},
+            {
+                "object": "#9",
+                "prop": 'odd "name',
+                "value": moolit.serialize([Obj(2), "value"]),
+            },
         )
     ]
 

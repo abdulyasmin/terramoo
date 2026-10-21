@@ -40,8 +40,10 @@ def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | N
     objs = list(by_obj)
     out: dict[str, ObjectDef | None] = {}
     for i in range(0, len(objs), CHUNK):
-        batch = objs[i:i + CHUNK]
-        bindings = [[by_obj[obj], obj, refs.generation_for(by_obj[obj]) or ""] for obj in batch]
+        batch = objs[i : i + CHUNK]
+        bindings = [
+            [by_obj[obj], obj, refs.generation_for(by_obj[obj]) or ""] for obj in batch
+        ]
         records = world.eval(world.helper("tmoo_export", moolit.serialize(bindings)))
         if not isinstance(records, list):
             raise MooError("tmoo_export returned a malformed result")
@@ -60,8 +62,14 @@ def export(world: World, refs: Refs, keys: list[str]) -> dict[str, ObjectDef | N
                 raise MooError(f"tmoo_export returned {obj} more than once")
             seen.add(obj)
             key = by_obj[obj]
-            dialect = getattr(getattr(world, "transport", None), "literal_dialect", moolit.LAMBDA)
-            out[key] = None if len(rec) == 1 else _to_def(key, rec, refs, world.ignore_props, dialect)
+            dialect = getattr(
+                getattr(world, "transport", None), "literal_dialect", moolit.LAMBDA
+            )
+            out[key] = (
+                None
+                if len(rec) == 1
+                else _to_def(key, rec, refs, world.ignore_props, dialect)
+            )
         missing = [obj for obj in batch if obj not in seen]
         if missing:
             raise MooError(f"tmoo_export returned no record for {missing[0]}")
@@ -72,7 +80,9 @@ def _owner(o: Obj, refs: Refs):
     return None if o == refs.player else refs.symbolize_obj(o)
 
 
-def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = moolit.LAMBDA) -> ObjectDef:
+def _to_def(
+    key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = moolit.LAMBDA
+) -> ObjectDef:
     _, name, parent, location, owner, flags, props, verbs = rec
     ignored = {n.lower() for n in ignore}
     if not (
@@ -102,7 +112,9 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
             and isinstance(prop[0], str)
             and _one_line(prop[0], nonempty=True)
         ):
-            raise MooError(f"tmoo_export returned a malformed property record for {key}")
+            raise MooError(
+                f"tmoo_export returned a malformed property record for {key}"
+            )
         pname = prop[0]
         if pname.lower() in ignored:
             continue
@@ -114,12 +126,16 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
             and isinstance(prop[4], str)
             and _alphabet(prop[3], "rwc")
         ):
-            raise MooError(f"tmoo_export returned a malformed property record for {key}")
+            raise MooError(
+                f"tmoo_export returned a malformed property record for {key}"
+            )
         pname, defined, powner, perms, literal = prop
         try:
             value = moolit.parse(literal, dialect=dialect)
         except moolit.LiteralError as e:
-            raise MooError(f"tmoo_export returned {key} property {pname!r} with a malformed literal: {e}") from None
+            raise MooError(
+                f"tmoo_export returned {key} property {pname!r} with a malformed literal: {e}"
+            ) from None
         obj.props.append(
             PropDef(
                 name=pname,
@@ -148,18 +164,26 @@ def _to_def(key: str, rec: list, refs: Refs, ignore: set[str], dialect: str = mo
             and all(_one_line(line) for line in verb[4])
             and (len(verb) == 5 or type(verb[5]) is int and verb[5] >= 1)
         ):
-            name = verb[0] if isinstance(verb, list) and verb and isinstance(verb[0], str) else "?"
-            raise MooError(f"tmoo_export returned {key} verb {name!r} with malformed fields")
+            name = (
+                verb[0]
+                if isinstance(verb, list) and verb and isinstance(verb[0], str)
+                else "?"
+            )
+            raise MooError(
+                f"tmoo_export returned {key} verb {name!r} with malformed fields"
+            )
         names, vowner, perms, args, code = verb[:5]
         live_index = verb[5] if len(verb) == 6 else exported_index
-        obj.verbs.append(VerbDef(
-            names=names,
-            code=list(code),
-            args=tuple(args),
-            perms=perms,
-            owner=_owner(vowner, refs),
-            live_index=live_index,
-        ))
+        obj.verbs.append(
+            VerbDef(
+                names=names,
+                code=list(code),
+                args=tuple(args),
+                perms=perms,
+                owner=_owner(vowner, refs),
+                live_index=live_index,
+            )
+        )
     return obj
 
 

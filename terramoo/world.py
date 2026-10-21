@@ -97,7 +97,10 @@ def helper_source(name: str, serialize=moolit.serialize) -> list[str]:
     source = (HELPER_DIR / f"{name}.moo").read_text()
     if name == "tmoo_player_read":
         from .playerdef import PROTECTED
-        source = source.replace("__TMOO_PLAYER_PROTECTED__", serialize(sorted(PROTECTED)))
+
+        source = source.replace(
+            "__TMOO_PLAYER_PROTECTED__", serialize(sorted(PROTECTED))
+        )
     return source.splitlines()
 
 
@@ -110,7 +113,9 @@ def find_root() -> Path:
     for d in (here, *here.parents):
         if (d / "worlds").is_dir():
             return d
-    raise MooError("no worlds/ directory here or above (run `tmoo init <world>` to start one, or set TMOO_ROOT)")
+    raise MooError(
+        "no worlds/ directory here or above (run `tmoo init <world>` to start one, or set TMOO_ROOT)"
+    )
 
 
 def registry_value(raw) -> Registry:
@@ -159,7 +164,9 @@ def validate_key(value: object) -> str:
     try:
         key = objdef.validate_identifier(value, "registry key")
         if key.lower() == "me":
-            raise MooError("registry key me is reserved for the player; rename the legacy binding")
+            raise MooError(
+                "registry key me is reserved for the player; rename the legacy binding"
+            )
         return key
     except objdef.FormatError as e:
         raise MooError(str(e)) from None
@@ -179,34 +186,58 @@ class World:
     _helper_version_checked: bool = False
 
     @classmethod
-    def load(cls, root: Path, name: str | None) -> "World":
+    def load(cls, root: Path, name: str | None) -> World:
         worlds_dir = root / "worlds"
-        worlds = sorted(p.name for p in worlds_dir.iterdir() if (p / "world.toml").exists()) if worlds_dir.is_dir() else []
+        worlds = (
+            sorted(p.name for p in worlds_dir.iterdir() if (p / "world.toml").exists())
+            if worlds_dir.is_dir()
+            else []
+        )
         if name is None:
-            name = os.environ.get("TMOO_WORLD") or (worlds[0] if len(worlds) == 1 else None)
+            name = os.environ.get("TMOO_WORLD") or (
+                worlds[0] if len(worlds) == 1 else None
+            )
         if name is None:
-            raise MooError(f"which world? one of: {', '.join(worlds) or '(none)'} (pass --world or set TMOO_WORLD)")
+            raise MooError(
+                f"which world? one of: {', '.join(worlds) or '(none)'} (pass --world or set TMOO_WORLD)"
+            )
         cfg_path = worlds_dir / name / "world.toml"
         if not cfg_path.exists():
             raise MooError(f"no such world {name!r} (looked for {cfg_path})")
         cfg = tomllib.loads(cfg_path.read_text())
-        if type(cfg.get("format_version", 1)) is not int or cfg.get("format_version", 1) != 1:
+        if (
+            type(cfg.get("format_version", 1)) is not int
+            or cfg.get("format_version", 1) != 1
+        ):
             raise MooError(f"{cfg_path}: unsupported world format_version")
         conn = dict(cfg.get("connection", {}))
         if "player" not in cfg:
             raise MooError(f"{cfg_path}: `player` is required")
         core = dict(cfg.get("core", {}))
-        ignore = {n.lower() for n in (
-            *DEFAULT_IGNORE_PROPS,
-            *cfg.get("ignore_props", []),
-            *core.get("ignore_props", []),
-        )}
-        ignore -= {n.lower() for n in (
-            *cfg.get("keep_props", []), *core.get("keep_props", []),
-        )}
+        ignore = {
+            n.lower()
+            for n in (
+                *DEFAULT_IGNORE_PROPS,
+                *cfg.get("ignore_props", []),
+                *core.get("ignore_props", []),
+            )
+        }
+        ignore -= {
+            n.lower()
+            for n in (
+                *cfg.get("keep_props", []),
+                *core.get("keep_props", []),
+            )
+        }
         ignore.add(GENERATION_PROP)
-        return cls(name=name, root=root, player_name=cfg["player"], connection=conn,
-                   core=core, ignore_props=ignore)
+        return cls(
+            name=name,
+            root=root,
+            player_name=cfg["player"],
+            connection=conn,
+            core=core,
+            ignore_props=ignore,
+        )
 
     # ----- paths
 
@@ -241,7 +272,9 @@ class World:
         try:
             safe_path(self.objects_dir, path)
         except MooError as e:
-            raise MooError(f"refusing to write {path}: unsafe path or outside the objects directory: {e}") from None
+            raise MooError(
+                f"refusing to write {path}: unsafe path or outside the objects directory: {e}"
+            ) from None
 
     def describe(self) -> str:
         c = self.connection
@@ -283,12 +316,13 @@ class World:
             if snapshots is not None:
                 snapshots[path] = (data, identity)
             if obj.key != path.stem:
-                raise MooError(f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}")
+                raise MooError(
+                    f"{path.relative_to(self.root)}: file is named {path.stem!r} but declares object {obj.key!r}"
+                )
             # MOO string comparison ignores case, and so does the registry.
             same_fold = [*folded.get(obj.key.lower(), []), obj.key]
             if len(same_fold) > 1 and not (
-                len(same_fold) == 2
-                and frozenset(same_fold) == allowed_folded_pair
+                len(same_fold) == 2 and frozenset(same_fold) == allowed_folded_pair
             ):
                 raise MooError(
                     f"duplicate keys or keys that differ only in case: {key_paths[obj.key.lower()]} and {path}"
@@ -298,7 +332,9 @@ class World:
             out[obj.key] = obj
         return out
 
-    def write_file(self, obj: ObjectDef, *, exclusive: bool = False, into: str | None = None) -> Path:
+    def write_file(
+        self, obj: ObjectDef, *, exclusive: bool = False, into: str | None = None
+    ) -> Path:
         self.objects_dir.mkdir(parents=True, exist_ok=True)
         path = self.file_for(obj.key, **({"into": into} if into is not None else {}))
         self._check_object_path(path)
@@ -313,7 +349,9 @@ class World:
     @property
     def transport(self) -> Transport:
         if self._transport is None:
-            self._transport = connect(self.connection, self.player_name, secret_for(self.name))
+            self._transport = connect(
+                self.connection, self.player_name, secret_for(self.name)
+            )
         return self._transport
 
     def close(self) -> None:
@@ -335,7 +373,11 @@ class World:
         if self._helper_version_checked:
             return
         props = self.eval(f"properties({self.toolbox})")
-        version = self.eval(f"{self.toolbox}.{HELPER_VERSION_PROP}") if HELPER_VERSION_PROP in props else None
+        version = (
+            self.eval(f"{self.toolbox}.{HELPER_VERSION_PROP}")
+            if HELPER_VERSION_PROP in props
+            else None
+        )
         if version != HELPER_VERSION:
             raise MooError(
                 f"toolbox helpers are outdated (need version {HELPER_VERSION}); run `tmoo bootstrap`"
@@ -347,12 +389,16 @@ class World:
         if self._player is None:
             who, name = self.eval("{player, player.name}")
             if name.lower() != self.player_name.lower():
-                raise MooError(f"logged in as {name} ({who}), but world.toml says player = {self.player_name!r}")
+                raise MooError(
+                    f"logged in as {name} ({who}), but world.toml says player = {self.player_name!r}"
+                )
             self._player = who
         return self._player
 
     def _find_toolbox(self) -> Obj | None:
-        if self.eval(f'"{TOOLBOX_PROP}" in properties(player) && valid(player.{TOOLBOX_PROP})'):
+        if self.eval(
+            f'"{TOOLBOX_PROP}" in properties(player) && valid(player.{TOOLBOX_PROP})'
+        ):
             return self.eval(f"player.{TOOLBOX_PROP}")
         return None
 
@@ -374,7 +420,12 @@ class World:
     def names(self, objs: list[Obj]) -> list[str]:
         if not objs:
             return []
-        return [name for _, _, name in self.eval(self.helper("tmoo_info", self.transport.serialize(objs)))]
+        return [
+            name
+            for _, _, name in self.eval(
+                self.helper("tmoo_info", self.transport.serialize(objs))
+            )
+        ]
 
     def bootstrap(self, log=print) -> Obj:
         """Find or create the toolbox and (re)install the helper verbs."""
@@ -393,11 +444,15 @@ class World:
             if TOOLBOX_PROP in self.eval("properties(player)"):
                 self.transport.set_prop("player", TOOLBOX_PROP, tb)
             else:
-                self.eval(f'add_property(player, "{TOOLBOX_PROP}", {tb}, {{player, "r"}})')
+                self.eval(
+                    f'add_property(player, "{TOOLBOX_PROP}", {tb}, {{player, "r"}})'
+                )
         self._toolbox = tb
         props = self.eval(f"properties({tb})")
         if "registry" not in props:
-            self.eval(f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})')
+            self.eval(
+                f'add_property({tb}, "registry", {{{{}}, {{}}, {{}}, 0}}, {{player, "r"}})'
+            )
         for name in HELPER_VERBS:
             code = helper_source(name, self.transport.serialize)
             r = self.transport.install_verb(tb, name, code)
@@ -440,7 +495,11 @@ class World:
         return {name: obj for name, obj in self.eval(self.helper("tmoo_sysrefs"))}
 
     def refs(self) -> Refs:
-        return Refs(player=self.player, registry=self.read_registry(), sysrefs=self.read_sysrefs())
+        return Refs(
+            player=self.player,
+            registry=self.read_registry(),
+            sysrefs=self.read_sysrefs(),
+        )
 
     def save_state(self, registry: dict[str, Obj]) -> None:
         save_state(self.state_path, self.player, registry, self._toolbox)

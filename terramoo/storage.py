@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
-from datetime import date, datetime, time
 import hashlib
 import json
 import os
+from datetime import date, datetime, time
 from pathlib import Path
 from uuid import uuid4
 
@@ -55,7 +55,9 @@ def canonical_name(path: Path):
 def case_alias(source: Path, destination: Path):
     if source == destination or source.name.casefold() != destination.name.casefold():
         return False
-    if not source.parent.samefile(destination.parent) or not source.samefile(destination):
+    if not source.parent.samefile(destination.parent) or not source.samefile(
+        destination
+    ):
         return False
     names = {p.name for p in source.parent.iterdir()}
     return not {source.name, destination.name} <= names
@@ -86,6 +88,7 @@ def atomic_write(path: Path, data: bytes | str):
 
 def toml_text(data: dict) -> str:
     """Serialize TOML data while retaining every unrelated configuration value."""
+
     def value(v):
         if isinstance(v, str):
             return json.dumps(v, ensure_ascii=False)
@@ -98,7 +101,11 @@ def toml_text(data: dict) -> str:
         if isinstance(v, list):
             return "[" + ", ".join(value(x) for x in v) + "]"
         if isinstance(v, dict):
-            return "{ " + ", ".join(f"{value(k)} = {value(x)}" for k, x in v.items()) + " }"
+            return (
+                "{ "
+                + ", ".join(f"{value(k)} = {value(x)}" for k, x in v.items())
+                + " }"
+            )
         raise MooError(f"unsupported TOML configuration value: {type(v).__name__}")
 
     lines = []
@@ -127,7 +134,15 @@ def _target(world_dir: Path, relative: str) -> Path:
     path = Path(relative)
     if path.is_absolute() or not path.parts or ".." in path.parts:
         raise MooError(f"unsafe transaction path: {relative}")
-    if path.parts[0] not in {"objects", ".packages", "world.toml", "packages.lock.json", "state.json", "player.moo", ".player"}:
+    if path.parts[0] not in {
+        "objects",
+        ".packages",
+        "world.toml",
+        "packages.lock.json",
+        "state.json",
+        "player.moo",
+        ".player",
+    }:
         raise MooError(f"unexpected transaction path: {relative}")
     if path.parts[0] == ".player" and path != Path(".player/state.json"):
         raise MooError("player transactions may replace only the player receipt")
@@ -148,7 +163,11 @@ def _decode(value):
 def recover(world_dir: Path):
     journal = journal_path(world_dir)
     record = read_json(journal)
-    if not isinstance(record, dict) or record.get("schema_version") != 1 or not isinstance(record.get("changes"), list):
+    if (
+        not isinstance(record, dict)
+        or record.get("schema_version") != 1
+        or not isinstance(record.get("changes"), list)
+    ):
         raise MooError(f"invalid or unsupported transaction journal: {journal}")
     changes = []
     seen = set()
@@ -162,7 +181,9 @@ def recover(world_dir: Path):
         before, after = _decode(entry["before"]), _decode(entry["after"])
         current = target.read_bytes() if target.exists() else None
         if current not in (before, after):
-            raise MooError(f"{target} changed during transaction; preserve the edit and reconcile before package recover")
+            raise MooError(
+                f"{target} changed during transaction; preserve the edit and reconcile before package recover"
+            )
         changes.append((target, before, after))
     # Preflight every target before replacing any of them.
     for target, before, after in changes:
@@ -173,7 +194,9 @@ def recover(world_dir: Path):
                 canonical_name(target)
             continue
         if current != before:
-            raise MooError(f"{target} changed during transaction; recovery journal retained")
+            raise MooError(
+                f"{target} changed during transaction; recovery journal retained"
+            )
         if after is None:
             target.unlink()
             fsync_dir(target.parent)
@@ -183,7 +206,12 @@ def recover(world_dir: Path):
     fsync_dir(journal.parent)
 
 
-def transaction(world_dir: Path, changes: dict[Path, bytes | str | None], *, expected: dict[Path, bytes | None] | None = None):
+def transaction(
+    world_dir: Path,
+    changes: dict[Path, bytes | str | None],
+    *,
+    expected: dict[Path, bytes | None] | None = None,
+):
     journal = journal_path(world_dir)
     if journal.exists():
         raise MooError("unfinished local transaction; run tmoo package recover")
@@ -196,11 +224,17 @@ def transaction(world_dir: Path, changes: dict[Path, bytes | str | None], *, exp
                 raise MooError(f"{path} changed while preparing the transaction")
     entries = []
     encode = lambda data: base64.b64encode(data).decode() if data is not None else None
-    replacements = [path for path, value in changes.items() if value is not None and path.exists()]
+    replacements = [
+        path for path, value in changes.items() if value is not None and path.exists()
+    ]
     for path, after in sorted(changes.items(), key=lambda pair: str(pair[0])):
         relative = str(path.relative_to(world_dir))
         path = _target(world_dir, relative)
-        if after is None and path.exists() and any(case_alias(path, other) for other in replacements):
+        if (
+            after is None
+            and path.exists()
+            and any(case_alias(path, other) for other in replacements)
+        ):
             # A case-only rename can name the same directory entry twice.
             # Replacing its destination performs both changes; deleting the
             # source afterward would delete the newly written file as well.
@@ -209,8 +243,12 @@ def transaction(world_dir: Path, changes: dict[Path, bytes | str | None], *, exp
         if isinstance(after, str):
             after = after.encode()
         if before != after:
-            entries.append({"path": relative, "before": encode(before), "after": encode(after)})
+            entries.append(
+                {"path": relative, "before": encode(before), "after": encode(after)}
+            )
     if not entries:
         return
-    atomic_write(journal, json_text({"schema_version": 1, "id": uuid4().hex, "changes": entries}))
+    atomic_write(
+        journal, json_text({"schema_version": 1, "id": uuid4().hex, "changes": entries})
+    )
     recover(world_dir)

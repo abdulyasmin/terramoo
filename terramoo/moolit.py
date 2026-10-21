@@ -95,7 +95,7 @@ def _tokens(text: str):
     while pos < len(text):
         m = _TOKEN.match(text, pos)
         if not m:
-            raise LiteralError(f"bad literal at offset {pos}: {text[pos:pos + 20]!r}")
+            raise LiteralError(f"bad literal at offset {pos}: {text[pos : pos + 20]!r}")
         pos = m.end()
         kind = m.lastgroup
         if kind != "ws":
@@ -132,7 +132,15 @@ def _unescape(s: str, dialect: str) -> str:
     out = []
     body = s[1:-1]
     i = 0
-    simple = {'"': '"', "'": "'", "\\": "\\", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+    simple = {
+        '"': '"',
+        "'": "'",
+        "\\": "\\",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "0": "\0",
+    }
     while i < len(body):
         c = body[i]
         if c != "\\":
@@ -151,8 +159,10 @@ def _unescape(s: str, dialect: str) -> str:
         if not digits:
             out.append(escape)  # mooR keeps LambdaMOO's unknown-escape behavior
             continue
-        encoded = body[i:i + digits]
-        if len(encoded) != digits or not all(c in "0123456789abcdefABCDEF" for c in encoded):
+        encoded = body[i : i + digits]
+        if len(encoded) != digits or not all(
+            c in "0123456789abcdefABCDEF" for c in encoded
+        ):
             raise LiteralError(f"invalid \\{escape} escape")
         codepoint = int(encoded, 16)
         if 0xD800 <= codepoint <= 0xDFFF:
@@ -225,7 +235,14 @@ def escape(s: str, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str:
     if dialect == LAMBDA:
         return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
     out = ['"']
-    special = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\0": "\\0"}
+    special = {
+        '"': '\\"',
+        "\\": "\\\\",
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+        "\0": "\\0",
+    }
     for c in s:
         if c in special:
             out.append(special[c])
@@ -259,13 +276,23 @@ def serialize(value, *, dialect: str = LAMBDA, raw_unicode: bool = False) -> str
     if isinstance(value, (Obj, Err, Ref, Sym)):
         return str(value)
     if isinstance(value, Map):
-        return "[" + ", ".join(
-            f"{serialize(k, dialect=dialect, raw_unicode=raw_unicode)} -> "
-            f"{serialize(v, dialect=dialect, raw_unicode=raw_unicode)}"
-            for k, v in value.items()
-        ) + "]"
+        return (
+            "["
+            + ", ".join(
+                f"{serialize(k, dialect=dialect, raw_unicode=raw_unicode)} -> "
+                f"{serialize(v, dialect=dialect, raw_unicode=raw_unicode)}"
+                for k, v in value.items()
+            )
+            + "]"
+        )
     if isinstance(value, (list, tuple)):
-        return "{" + ", ".join(serialize(v, dialect=dialect, raw_unicode=raw_unicode) for v in value) + "}"
+        return (
+            "{"
+            + ", ".join(
+                serialize(v, dialect=dialect, raw_unicode=raw_unicode) for v in value
+            )
+            + "}"
+        )
     raise LiteralError(f"cannot serialize {type(value).__name__}")
 
 
@@ -280,7 +307,9 @@ def walk(value, fn):
         for key, item in value.items():
             new_key = walk(key, fn)
             if new_key in out:
-                raise LiteralError(f"map key collision after transformation: {new_key!r}")
+                raise LiteralError(
+                    f"map key collision after transformation: {new_key!r}"
+                )
             out[new_key] = walk(item, fn)
         return out
     if isinstance(value, list):

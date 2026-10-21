@@ -26,13 +26,13 @@ print(*m.eval('#2.password = argon2("wizard", salt())'), sep="\n")
 
 code = (
     ';p = $string_utils:match_player("tester"); '
-    'if (!valid(p)) '
+    "if (!valid(p)) "
     '  r = $wiz_utils:make_player("tester", "tester@localhost"); p = r[1]; '
-    'endif '
+    "endif "
     'p.password = argon2("tester", salt()); '
     'p.description = "A test programmer for terramoo."; '
-    '$wiz_utils:set_programmer(p); '
-    'return {p, p.name, is_player(p), p.programmer, p.wizard, parent(p)};'
+    "$wiz_utils:set_programmer(p); "
+    "return {p, p.name, is_player(p), p.programmer, p.wizard, parent(p)};"
 )
 out = m.eval(code)
 print(*out, sep="\n")

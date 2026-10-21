@@ -133,7 +133,7 @@ class _Wire:
         self.text.extend(self._strip_iac())
         while (nl := self.text.find(b"\n")) >= 0:
             line = bytes(self.text[:nl])
-            del self.text[:nl + 1]
+            del self.text[: nl + 1]
             if line.endswith(b"\r"):
                 line = line[:-1]
             line = line.replace(b"\r\0", b"\r")  # NVT: CR NUL is a literal CR
@@ -180,31 +180,65 @@ class _Wire:
 class Telnet(Transport):
     can_suspend = True
 
-    def __init__(self, host: str, port: int, player: str, password: str, *, tls: bool = False,
-                 verify: bool = True, login: str = "connect {player} {password}", eval_prefix: str = ";;",
-                 tell: str = "notify(player, {})", chunk: int = 900, timeout: float = 120.0,
-                 connect_timeout: float = 20.0, batch_bytes: int = 16_000):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        player: str,
+        password: str,
+        *,
+        tls: bool = False,
+        verify: bool = True,
+        login: str = "connect {player} {password}",
+        eval_prefix: str = ";;",
+        tell: str = "notify(player, {})",
+        chunk: int = 900,
+        timeout: float = 120.0,
+        connect_timeout: float = 20.0,
+        batch_bytes: int = 16_000,
+    ):
         self.host, self.port, self.tls, self.verify = host, port, tls, verify
         self.player, self.password = player, password
-        self.login_template, self.eval_prefix, self.tell_template = login, eval_prefix, tell
+        self.login_template, self.eval_prefix, self.tell_template = (
+            login,
+            eval_prefix,
+            tell,
+        )
         self.chunk, self.timeout, self.connect_timeout = chunk, timeout, connect_timeout
         self.batch_bytes = batch_bytes
         self.noise: collections.deque[str] = collections.deque(maxlen=40)
         self._wire: _Wire | None = None
 
     @classmethod
-    def from_config(cls, conn: dict, player: str, secret: str) -> "Telnet":
+    def from_config(cls, conn: dict, player: str, secret: str) -> Telnet:
         if "host" not in conn:
             raise MooError("a telnet connection needs `host` (and `port`)")
-        keys = ("tls", "verify", "login", "eval_prefix", "tell", "chunk", "timeout", "connect_timeout", "batch_bytes")
-        return cls(conn["host"], int(conn.get("port", 7777)), player, secret,
-                   **{k: conn[k] for k in keys if k in conn})
+        keys = (
+            "tls",
+            "verify",
+            "login",
+            "eval_prefix",
+            "tell",
+            "chunk",
+            "timeout",
+            "connect_timeout",
+            "batch_bytes",
+        )
+        return cls(
+            conn["host"],
+            int(conn.get("port", 7777)),
+            player,
+            secret,
+            **{k: conn[k] for k in keys if k in conn},
+        )
 
     # ----- connection
 
     def _open(self) -> None:
         try:
-            sock = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
+            sock = socket.create_connection(
+                (self.host, self.port), timeout=self.connect_timeout
+            )
         except OSError as e:
             raise MooError(f"cannot reach {self.host}:{self.port}: {e}") from None
         if self.tls:
@@ -226,12 +260,16 @@ class Telnet(Transport):
             )
         except (MooError, OSError) as e:
             self.close()
-            raise MooError(f"could not send the login command to {self.host}:{self.port}: {e}") from None
+            raise MooError(
+                f"could not send the login command to {self.host}:{self.port}: {e}"
+            ) from None
         try:
             self._request("player", self.connect_timeout, login=True)
         except MooError as e:
             self.close()
-            raise MooError(f"could not log in to {self.host}:{self.port} as {self.player}: {e}") from None
+            raise MooError(
+                f"could not log in to {self.host}:{self.port} as {self.player}: {e}"
+            ) from None
 
     def _drain(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds
@@ -282,11 +320,17 @@ class Telnet(Transport):
             # A command is one line; MOO string literals have no newline escape.
             raise MooError("a value with a newline in it cannot be sent over telnet")
         wire = self._wire
-        tag = "~" + "".join(random.choices(string.ascii_letters + string.digits, k=10)) + "~"
+        tag = (
+            "~"
+            + "".join(random.choices(string.ascii_letters + string.digits, k=10))
+            + "~"
+        )
         deadline = time.monotonic() + timeout
         try:
             wire.send_line(self.program(tag, expression), deadline)
-            wire.send_line(f"{self.eval_prefix}{self._tell(self.escape(tag + 'Z'))}", deadline)
+            wire.send_line(
+                f"{self.eval_prefix}{self._tell(self.escape(tag + 'Z'))}", deadline
+            )
         except MooError:
             raise
         except OSError as e:
@@ -307,17 +351,22 @@ class Telnet(Transport):
                 if outcome is not None:
                     break  # the answer is in; only the sentinel went missing
                 what = "log in" if login and not started else "answer"
-                raise MooError(f"the MOO did not {what} within {timeout:.0f}s" + self._context(untagged))
+                raise MooError(
+                    f"the MOO did not {what} within {timeout:.0f}s"
+                    + self._context(untagged)
+                )
             if not line.startswith(tag):
                 line = _readable(line)
                 self.noise.append(line)
-                if not _TAG.match(line):  # a stale tag from an earlier request is not news
+                if not _TAG.match(
+                    line
+                ):  # a stale tag from an earlier request is not news
                     untagged.append(line)
                 if login and any(s in line.lower() for s in LOGIN_FAILED):
                     raise MooError(line.strip())
                 continue
             deadline = time.monotonic() + timeout  # still talking: keep waiting
-            kind, rest = line[len(tag)], line[len(tag) + 1:]
+            kind, rest = line[len(tag)], line[len(tag) + 1 :]
             if kind == "S":
                 started = True
             elif kind == "B":
@@ -350,10 +399,16 @@ class Telnet(Transport):
                             received, unit = len(text), "characters"
                         else:
                             received = None
-                            outcome = ("P", "the MOO sent a Unicode answer without a valid length convention")
+                            outcome = (
+                                "P",
+                                "the MOO sent a Unicode answer without a valid length convention",
+                            )
                         if received is not None:
                             if expected_length != received:
-                                outcome = ("P", f"the MOO declared {expected_length} {unit} but received {received}")
+                                outcome = (
+                                    "P",
+                                    f"the MOO declared {expected_length} {unit} but received {received}",
+                                )
                             else:
                                 if length_unit == 1:
                                     self.literal_dialect = moolit.MOOR
@@ -375,7 +430,9 @@ class Telnet(Transport):
                 if outcome is not None:
                     break
                 if not started:
-                    raise MooError("the expression did not compile" + self._context(untagged))
+                    raise MooError(
+                        "the expression did not compile" + self._context(untagged)
+                    )
         kind, text = outcome
         if kind == "P":
             raise MooError(text)
@@ -388,7 +445,9 @@ class Telnet(Transport):
         try:
             return moolit.parse(text, dialect=self.literal_dialect)
         except moolit.LiteralError as e:
-            raise MooError(f"cannot read the MOO's answer ({e}): {text[:200]}") from None
+            raise MooError(
+                f"cannot read the MOO's answer ({e}): {text[:200]}"
+            ) from None
 
     @staticmethod
     def _context(lines: list[str]) -> str:

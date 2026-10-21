@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from terramoo import export as export_mod, moolit
+from terramoo import export as export_mod
+from terramoo import moolit
 from terramoo.errors import MooError
 from terramoo.moolit import Obj
 from terramoo.refs import Refs
@@ -62,24 +63,36 @@ def answer(value_literal, chunk=4, noise=()):
             return ["*** Connected ***"]
         if is_sentinel(tag, line):
             return [tag + "Z"]
-        parts = [value_literal[i:i + chunk] for i in range(0, len(value_literal), chunk)]
-        return [tag + "S", *noise, tag + "B" + str(len(value_literal)), tag + "C1",
-                *[tag + "D" + p for p in parts], tag + "E", "=> 0"]
+        parts = [
+            value_literal[i : i + chunk] for i in range(0, len(value_literal), chunk)
+        ]
+        return [
+            tag + "S",
+            *noise,
+            tag + "B" + str(len(value_literal)),
+            tag + "C1",
+            *[tag + "D" + p for p in parts],
+            tag + "E",
+            "=> 0",
+        ]
+
     return reply
 
 
 def client(monkeypatch, fake, **kw):
-    monkeypatch.setattr(socket, "create_connection", lambda address, timeout: fake.client)
+    monkeypatch.setattr(
+        socket, "create_connection", lambda address, timeout: fake.client
+    )
     options = {"timeout": 3, "connect_timeout": 3, **kw}
     return Telnet("local", 0, "alice", "pw", **options)
 
 
 def test_value_is_reassembled_from_chunks_amid_noise(monkeypatch):
-    fake = FakeMoo(answer('{#12, "a \\"b\\"", {1, 2.5}}', noise=["Bob says, \"hi\""]))
+    fake = FakeMoo(answer('{#12, "a \\"b\\"", {1, 2.5}}', noise=['Bob says, "hi"']))
     t = client(monkeypatch, fake)
     assert t.eval("anything") == [Obj(12), 'a "b"', [1, 2.5]]
     assert fake.received[0] == "connect alice pw"
-    assert "Bob says, \"hi\"" in t.noise
+    assert 'Bob says, "hi"' in t.noise
 
 
 def test_socketpair_client_runs_production_open(monkeypatch):
@@ -97,12 +110,24 @@ def test_socketpair_client_runs_production_open(monkeypatch):
     assert opened == [("local", 0)]
 
 
-@pytest.mark.parametrize("expression, error_reply, expected", [
-    ("secret", lambda tag: [tag + "S", tag + 'X{E_PERM, "Permission denied"}'], "E_PERM: Permission denied"),
-    ("bad(", lambda tag: ["Line 1:  syntax error", "1 error."], "did not compile:\n  Line 1:  syntax error"),
-])
+@pytest.mark.parametrize(
+    "expression, error_reply, expected",
+    [
+        (
+            "secret",
+            lambda tag: [tag + "S", tag + 'X{E_PERM, "Permission denied"}'],
+            "E_PERM: Permission denied",
+        ),
+        (
+            "bad(",
+            lambda tag: ["Line 1:  syntax error", "1 error."],
+            "did not compile:\n  Line 1:  syntax error",
+        ),
+    ],
+)
 def test_errors_become_moo_errors(monkeypatch, expression, error_reply, expected):
     """A raised error is reported as such; a compile error quotes what the core printed."""
+
     def reply(tag, line):
         if tag is None:
             return []
@@ -111,6 +136,7 @@ def test_errors_become_moo_errors(monkeypatch, expression, error_reply, expected
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
         return error_reply(tag)
+
     t = client(monkeypatch, FakeMoo(reply))
     with pytest.raises(MooError, match=expected):
         t.eval(expression)
@@ -121,6 +147,7 @@ def test_login_failure_is_reported_at_once(monkeypatch):
         if tag is None:
             return ["Either that player does not exist, or has a different password."]
         return ["I don't understand that."]
+
     with pytest.raises(MooError, match="could not log in .*does not exist"):
         client(monkeypatch, FakeMoo(reply)).eval("1")
 
@@ -169,7 +196,14 @@ def test_request_gives_both_writes_one_deadline():
             self.sent.append((line, deadline))
             if len(self.sent) == 2:
                 tag = TAG.search(self.sent[0][0]).group(1)
-                self.lines = [tag + "S", tag + "B1", tag + "C1", tag + "D1", tag + "E", tag + "Z"]
+                self.lines = [
+                    tag + "S",
+                    tag + "B1",
+                    tag + "C1",
+                    tag + "D1",
+                    tag + "E",
+                    tag + "Z",
+                ]
 
         def read_line(self, deadline):
             return self.lines.pop(0)
@@ -233,7 +267,9 @@ def test_connection_close_mid_request_is_reported_without_retry(monkeypatch):
 
     # The peer may close before the sentinel write or while we read its reply.
     # Either path must report an uncertain outcome without retrying the call.
-    with pytest.raises(MooError, match="the MOO closed the connection|request was not retried"):
+    with pytest.raises(
+        MooError, match="the MOO closed the connection|request was not retried"
+    ):
         t.eval("potentially_destructive_call()")
     assert sum("potentially_destructive_call()" in line for line in fake.received) == 1
 
@@ -279,8 +315,14 @@ def test_unicode_answer_split_between_utf8_bytes_is_reassembled(monkeypatch):
         if "_r = (player)" in line:
             return [tag + "S", tag + "B2", tag + "D#1", tag + "E"]
         prefix = tag.encode()
-        return [prefix + b"S", prefix + b"B904", prefix + b"C2", prefix + b"D" + payload[:900],
-                prefix + b"D" + payload[900:], prefix + b"E"]
+        return [
+            prefix + b"S",
+            prefix + b"B904",
+            prefix + b"C2",
+            prefix + b"D" + payload[:900],
+            prefix + b"D" + payload[900:],
+            prefix + b"E",
+        ]
 
     t = client(monkeypatch, FakeMoo(reply))
     assert t.eval("anything") == literal[1:-1]
@@ -305,7 +347,9 @@ def test_truncated_unicode_answer_is_rejected(monkeypatch):
 @pytest.mark.parametrize("expression", ["1\n2", "1\r2"])
 def test_multiline_expressions_are_rejected_before_they_reach_the_wire(expression):
     t = Telnet("local", 0, "alice", "pw")
-    t._wire = SimpleNamespace(send_line=lambda line: pytest.fail("sent malformed expression"))
+    t._wire = SimpleNamespace(
+        send_line=lambda line: pytest.fail("sent malformed expression")
+    )
 
     with pytest.raises(MooError, match="newline"):
         t._request(expression, 1)
@@ -324,7 +368,9 @@ def test_moor_escaped_nested_export_record_uses_moor_dialect(monkeypatch):
         eval=transport.eval,
     )
 
-    obj = export_mod.export(world, Refs(player=Obj(1), registry={"hall": Obj(10)}), ["hall"])["hall"]
+    obj = export_mod.export(
+        world, Refs(player=Obj(1), registry={"hall": Obj(10)}), ["hall"]
+    )["hall"]
 
     assert obj.name == "Hé"
     assert obj.props[0].value == "م\n"
@@ -343,9 +389,16 @@ def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, 
             return ["*** Connected ***"]
         if is_sentinel(tag, line):
             return [tag + "Z"]
-        result = "1" if "_r = (player)" in line or "_r = (1)" in line else answer_literal
-        return [tag + "S", tag + "B" + str(len(result)), tag + "C1",
-                tag + "D" + result, tag + "E"]
+        result = (
+            "1" if "_r = (player)" in line or "_r = (1)" in line else answer_literal
+        )
+        return [
+            tag + "S",
+            tag + "B" + str(len(result)),
+            tag + "C1",
+            tag + "D" + result,
+            tag + "E",
+        ]
 
     fake = FakeMoo(reply)
     t = client(monkeypatch, fake)
@@ -355,11 +408,16 @@ def test_moor_telnet_round_trips_strings_using_ascii_only_commands(monkeypatch, 
     assert t.eval(t.serialize(value)) == value
     if value == "before😀after":
         assert any(f"_r = ({literal})" in line for line in fake.received)
-    assert all(line.isascii() and all(0x20 <= ord(char) <= 0x7E for char in line) for line in fake.received)
+    assert all(
+        line.isascii() and all(0x20 <= ord(char) <= 0x7E for char in line)
+        for line in fake.received
+    )
 
 
 @pytest.mark.parametrize("value", ["Café", "مرحبا", "before\x01after", "before😀after"])
-def test_lambdamoo_telnet_rejects_string_bytes_the_server_would_drop(monkeypatch, value):
+def test_lambdamoo_telnet_rejects_string_bytes_the_server_would_drop(
+    monkeypatch, value
+):
     def reply(tag, line):
         if tag is None:
             return ["*** Connected ***"]
