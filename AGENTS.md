@@ -51,6 +51,19 @@ file is what an agent needs to avoid breaking things.
     terramoo/export.py       MOO -> ObjectDef via tmoo_export
     terramoo/apply.py        ops -> MOO via tmoo_apply
     terramoo/world.py        world.toml, toolbox, bootstrap
+    terramoo/catalog.py      filesystem discovery for readers, writers, recovery
+    terramoo/modules.py      module membership, reference graphs, execution groups
+    terramoo/deployment.py   whole-world context with module mutation scopes
+    terramoo/packages.py     package inventories, compiled per world instance
+    terramoo/installation.py per-world package instances and local lifecycles
+    terramoo/updates.py      three-way package updates, local removal candidates
+    terramoo/imports.py      claim existing managed objects without recreating them
+    terramoo/removal.py      checked teardown of selected ownership records
+    terramoo/ownership.py    ownership epochs, mutation intents, receipts
+    terramoo/migrations.py   identity-preserving key migrations, resumable renames
+    terramoo/views.py        package identity checks, transactional exports
+    terramoo/storage.py      durable local replacement transactions
+    terramoo/errors.py       error types
     terramoo/transport/      telnet.py (any MOO), mcp.py (hosted gates)
     terramoo/helper/         the verbs installed on the toolbox
     terramoo/secrets.py      password / token lookup

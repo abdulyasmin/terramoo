@@ -287,8 +287,9 @@ verb code. Dynamic references and callback behavior still require explicit
 module declarations from the author.
 
 Upgrade all clients for a world together and run `tmoo bootstrap` to install
-helper version 13. Older flat-only clients do not understand nested files or
-package ownership; a new world-format marker cannot make them safe. Downgrading
+the current helper (version 14). Older flat-only clients do not understand
+nested files or package ownership; a new world-format marker cannot make them
+safe. Downgrading
 requires a validated export/flattening procedure or a matching world and
 database backup.
 

@@ -14,9 +14,9 @@ contains verification commands and common change paths.
 [README.md](README.md) owns command usage, file syntax, and upgrade instructions.
 [AGENTS.md](AGENTS.md) owns implementation constraints and required live tests;
 [CLAUDE.md](CLAUDE.md) redirects to it.
-[MODULES_AND_PACKAGES_PLAN.md](MODULES_AND_PACKAGES_PLAN.md) records the accepted
-requirements, earlier design proposals, and subsequent verification. Its opening
-code review describes the pre-implementation revision; use current source for
+The accepted modules-and-packages plan (requirements, earlier design proposals
+and verification) was removed once implemented; read it with
+`git show 4e5c586:MODULES_AND_PACKAGES_PLAN.md`. Use current source for
 schemas and behavior. This document maps that source.
 
 ## 1. High-level architecture
@@ -600,8 +600,8 @@ git diff --check
 The documentation regeneration ran collection, CLI help, and example validation
 with `--offline`; the example contains two modules and three objects. It did not
 rerun server suites or build distributions. The checked-in implementation record
-in [the plan](MODULES_AND_PACKAGES_PLAN.md#implementation-record-2026-10-09)
-reports 397 offline passes and all 12 live tests passing on each server at this
+in the plan's implementation record
+(`git show 4e5c586:MODULES_AND_PACKAGES_PLAN.md`) reports 397 offline passes and all 12 live tests passing on each server at this
 code state. Distinguish that recorded validation from a new test run.
 
 Helper, transport, or plan/apply changes require all three live testbeds,
@@ -670,7 +670,8 @@ before first use. A setup reset replaces the test database.
 
 For subsequent reading, use [README.md](README.md) for the user's workflow,
 [AGENTS.md](AGENTS.md) before a patch, the
-[accepted plan](MODULES_AND_PACKAGES_PLAN.md) for lifecycle decisions, and the
+accepted plan (`git show 4e5c586:MODULES_AND_PACKAGES_PLAN.md`) for lifecycle
+decisions, and the
 [LambdaMOO](testbeds/lambdamoo/README.md),
 [ToastStunt](testbeds/toaststunt/README.md), and
 [mooR](testbeds/moor/README.md) notes for server-specific validation.
